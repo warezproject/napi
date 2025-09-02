@@ -65,7 +65,7 @@ def call_nlk_api(keyword: str):
         "title": keyword
     }
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, params=params, timeout=30)
         r.raise_for_status()
         data = r.json()
         return data.get("docs", []) or []
