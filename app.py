@@ -102,18 +102,18 @@ inject = """
   };
 
   // searchBooks 오버라이드: 쿼리스트링만 갱신 → 앱 재실행
-  window.searchBooks = function() {
+    // 안전한 버전(iframe 내부 주소만 갱신)
+    window.searchBooks = function () {
     const input = document.getElementById('searchInput');
     const nextKw = (input ? input.value : '').trim();
+
+    // iframe 자체 주소만 바꾸기
     const url = new URL(window.location.href);
-    if (nextKw) { url.searchParams.set('kw', nextKw); }
-    else { url.searchParams.delete('kw'); }
-    if (window.parent && window.parent !== window) {
-      window.parent.location.href = url.toString();
-    } else {
-      window.location.href = url.toString();
-    }
-  };
+    if (nextKw) url.searchParams.set('kw', nextKw);
+    else url.searchParams.delete('kw');
+    window.location.href = url.toString();  // parent 사용 금지
+    };
+
 
   // 최초 렌더(주입 데이터로 그리기)
   document.addEventListener('DOMContentLoaded', function() {
