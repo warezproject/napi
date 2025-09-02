@@ -73,7 +73,7 @@ const nlkContainer = document.getElementById('nlkResults');
 jndiContainer.innerHTML = '';
 nlkContainer.innerHTML = '';
  // 전남연구원 JSON 데이터 검색
-  fetch('/app/static/전남연구원_자료.json')
+  fetch('/app/static/전남연구원.json')
     .then(res => res.json())
     .then(jndiData => {
       const matched = jndiData.filter(item =>
