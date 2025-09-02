@@ -320,22 +320,58 @@ jndi_all, jndi_meta = load_jndi_json_best_effort()
 # -----------------------------
 if submitted:
     # ----- 전남연구원 -----
-    jndi_hits = search_jndi(jndi_all, kw)
-
-    # 페이지네이션 (로컬 데이터)
     page_size = 10
     jndi_total = len(jndi_hits)
     jndi_total_pages = (jndi_total + page_size - 1) // page_size
-    jndi_page = st.number_input("전남연구원 페이지", 1, max(1, jndi_total_pages), 1, key="jndi_page")
 
-    start = (jndi_page - 1) * page_size
+    # 세션 상태 초기화
+    if "jndi_page" not in st.session_state:
+        st.session_state.jndi_page = 1
+
+    # 현재 페이지 데이터 슬라이스
+    start = (st.session_state.jndi_page - 1) * page_size
     end = start + page_size
     jndi_page_data = jndi_hits[start:end]
 
+    # 결과 표시
+    for b in jndi_page_data:
+        with st.container(border=True):
+            st.markdown(f"**{b.get('서명') or b.get('Title','')}**")
+
+    # --- 페이지네이션 버튼 (하단) ---
+    if jndi_total_pages > 1:
+        st.write("")
+        cols = st.columns(min(10, jndi_total_pages))  # 가로로 배치
+        start_page = max(1, st.session_state.jndi_page - 2)
+        end_page = min(jndi_total_pages, st.session_state.jndi_page + 2)
+        for i, p in enumerate(range(start_page, end_page + 1)):
+            if cols[i].button(str(p), key=f"jndi_page_{p}"):
+                st.session_state.jndi_page = p
+                st.experimental_rerun()
+
     # ----- 국립중앙도서관 -----
-    nlk_page = st.number_input("국립중앙도서관 페이지", 1, 9999, 1, key="nlk_page")
-    nlk_docs, nlk_total = call_nlk_api(kw, page_num=nlk_page, page_size=10)
-    nlk_total_pages = (nlk_total + page_size - 1) // page_size
+    if "nlk_page" not in st.session_state:
+        st.session_state.nlk_page = 1
+
+    nlk_docs, nlk_total = call_nlk_api(kw, page_num=st.session_state.nlk_page, page_size=10)
+    nlk_total_pages = (nlk_total + 9) // 10
+
+    # 결과 표시
+    for d in nlk_docs:
+        with st.container(border=True):
+            link = d.get("DETAIL_LINK") or ""
+            st.markdown(f"**[{d.get('TITLE','제목 없음')}]({link})**")
+
+    # --- 페이지네이션 버튼 (하단) ---
+    if nlk_total_pages > 1:
+        st.write("")
+        cols = st.columns(min(10, nlk_total_pages))
+        start_page = max(1, st.session_state.nlk_page - 2)
+        end_page = min(nlk_total_pages, st.session_state.nlk_page + 2)
+        for i, p in enumerate(range(start_page, end_page + 1)):
+            if cols[i].button(str(p), key=f"nlk_page_{p}"):
+                st.session_state.nlk_page = p
+                st.experimental_rerun()
 
     # -----------------------------
     # 결과 표시
