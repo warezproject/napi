@@ -563,9 +563,10 @@ with col_right:
                     f"출판사: {d.get('PUBLISHER','정보 없음')} · "
                     f"출간일: {d.get('PUBDATE','정보 없음')}"
                 )
-                cover = d.get("COVER", "")
-                if cover:
-                    st.image(cover, use_container_width=True)
+                #북커버 표시
+                #cover = d.get("COVER", "")
+                #if cover:
+                #    st.image(cover, use_container_width=True)
     else:
         st.info("검색 결과가 없습니다.")
 
