@@ -28,9 +28,7 @@ with st.form("search_form", clear_on_submit=False):
 def load_jndi_json_best_effort():
     """여러 후보 파일명 시도 + 존재/건수 메타 반환"""
     candidates = [
-        Path("static/전남연구원_자료.json"),
         Path("static/전남연구원.json"),
-        Path("static/jndi.json"),
     ]
     for p in candidates:
         if p.exists():
@@ -243,66 +241,60 @@ def _enrich_links_with_isbn(records: list, api_key: str) -> list:
         out.append(rec)
     return out
 
-# -----------------------------
-# NLK 호출: 1차 OpenAPI(JSON) → 2차 XML 보강 → (실패 시) 프록시 폴백
-# -----------------------------
 def call_nlk_api(keyword: str):
     """
-    1차: OpenAPI(search.do, JSON) 직접 호출
-    2차: 목록의 각 아이템에서 ISBN 발견 시 XML(detailSearch) 재조회 → detail_link 보강
-    3차: (1차가 실패/무결과일 때만) Cloudflare Worker 프록시 폴백
+    국립중앙도서관 OpenAPI (XML) 호출 → <detail_link> 포함된 결과 반환
     """
     if not keyword:
         return []
 
     api_key = st.secrets.get("NLK_OPENAPI_KEY") or st.secrets.get("NLK_CERT_KEY")
+    if not api_key:
+        st.error("Secrets에 NLK_OPENAPI_KEY (또는 NLK_CERT_KEY)가 없습니다.")
+        return []
 
-    # ---------- 1) Open API 직접 호출(JSON) ----------
-    if api_key:
-        url = "https://www.nl.go.kr/NL/search/openApi/search.do"
-        params = {
-            "key": api_key,
-            "apiType": "json",
-            "srchTarget": "total",
-            "kwd": keyword,
-            "pageNum": 1,
-            "pageSize": 10
-        }
-        headers = {"User-Agent": "Mozilla/5.0 (Streamlit OpenAPI Client)"}
-        try:
-            r = requests.get(url, params=params, headers=headers, timeout=12)
-            data = r.json()
-            rows = _extract_list_from_any(data)
-            records = [_normalize_nlk_record(rec) for rec in rows]
-            if records:
-                # ---------- 2) ISBN으로 detail_link 보강(XML) ----------
-                records = _enrich_links_with_isbn(records, api_key)
-                return records
-        except Exception as e:
-            st.info(f"Open API 직접 호출 실패: {e}")
+    url = "https://www.nl.go.kr/NL/search/openApi/search.do"
+    params = {
+        "key": api_key,
+        "apiType": "xml",
+        "srchTarget": "total",
+        "kwd": keyword,
+        "pageNum": 1,
+        "pageSize": 10,
+        "sort": "",
+        "category": "도서"
+    }
+    headers = {"User-Agent": "Mozilla/5.0 (Streamlit XML Client)"}
 
-    # ---------- 3) Cloudflare Worker 프록시 폴백 ----------
-    proxy_base = st.secrets.get("NLK_PROXY_BASE", "").rstrip("/")
-    if proxy_base:
-        try:
-            r = requests.get(
-                f"{proxy_base}/",
-                params={"title": keyword, "page_no": 1, "page_size": 10},
-                timeout=12,
-                headers={"User-Agent": "Mozilla/5.0 (Streamlit App via Proxy)"}
-            )
-            raw = r.json()
-            rows = _extract_list_from_any(raw)
-            records = [_normalize_nlk_record(rec) for rec in rows]
-            if api_key and records:
-                # 프록시 결과에도 ISBN이 있으면 보강 시도 (가능한 한 상세링크 확보)
-                records = _enrich_links_with_isbn(records, api_key)
-            return records
-        except Exception as e:
-            st.warning(f"프록시 호출도 실패: {e}")
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=12)
+        r.raise_for_status()
 
-    # 둘 다 실패 또는 결과 없음
-    return []
+        root = ET.fromstring(r.text)
+        docs = []
+        for item in root.findall(".//result/item"):
+            title = (item.findtext("title_info") or "").strip() or "제목 없음"
+            author = (item.findtext("author_info") or "").strip() or "정보 없음"
+            publisher = (item.findtext("pub_info") or "").strip() or "정보 없음"
+            year = (item.findtext("pub_year_info") or "").strip() or "정보 없음"
+            isbn = (item.findtext("isbn") or "").strip()
+            detail_link = (item.findtext("detail_link") or "").strip()
+            if detail_link.startswith("/"):
+                detail_link = f"https://www.nl.go.kr{detail_link}"
+
+            docs.append({
+                "TITLE": title,
+                "AUTHOR": author,
+                "PUBLISHER": publisher,
+                "PUBLISH_YEAR": year,
+                "ISBN": isbn,
+                "DETAIL_LINK": detail_link
+            })
+        return docs
+
+    except Exception as e:
+        st.warning(f"NLK OpenAPI 호출 오류: {e}")
+        return []
 
 # -----------------------------
 # 알라딘 커버 (옵션)
