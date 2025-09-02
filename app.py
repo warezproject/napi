@@ -403,12 +403,15 @@ with layout_cols[0]:
         st.write("")
         start_page = max(1, jndi_page - 2)
         end_page   = min(jndi_total_pages, jndi_page + 2)
-        pcols_jndi = st.columns(end_page - start_page + 1)  # 레이아웃 cols와 이름 다르게!
-        for i, p in enumerate(range(start_page, end_page + 1)):
-            label = f"**{p}**" if p == jndi_page else str(p)
-            if pcols_jndi[i].button(label, key=f"jndi_page_{p}"):
+
+        # 버튼들을 한 줄에 나란히 출력
+        pagination_container = st.container()
+        for p in range(start_page, end_page + 1):
+            label = f"[{p}]" if p == jndi_page else str(p)
+            if pagination_container.button(label, key=f"jndi_page_{p}"):
                 st.session_state.jndi_page = p
                 st.rerun()
+
 
 # 국립중앙도서관
 with layout_cols[1]:
