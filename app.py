@@ -9,7 +9,7 @@ st.title("국가정보정책협의회 TEST")
 keyword = st.text_input("도서 제목을 입력하세요...")
 if st.button("검색"):
     # 1) 전남연구원 로컬 JSON에서 검색
-    jndi = json.loads(Path("static/전남연구원_자료.json").read_text(encoding="utf-8"))
+    jndi = json.loads(Path("static/전남연구원.json").read_text(encoding="utf-8"))
     matched = [b for b in jndi if b.get("서명") and keyword in b["서명"]]
 
     st.subheader("전남연구원 검색 결과")
