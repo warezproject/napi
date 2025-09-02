@@ -12,7 +12,7 @@ import streamlit as st
 st.set_page_config(page_title="국가정보정책협의회 TEST", layout="wide")
 
 st.title("국가정보정책협의회 TEST")
-st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 Open API (ISBN 2차 조회로 상세링크 보강)")
+st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 Open API")
 
 # -----------------------------
 # 입력 UI
