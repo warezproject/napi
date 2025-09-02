@@ -197,13 +197,38 @@ def _extract_list_from_any(data: dict):
 # ---------- NLK 호출 ----------
 def call_nlk_api(keyword: str):
     """
-    1) Cloudflare Worker 프록시가 있으면 먼저 호출 (DETAIL_LINK 있을 수도/없을 수도)
-    2) 없거나 실패하면 Open API 직접 호출 (search.do)
+    1차: 국립중앙도서관 Open API(search.do) 직접 호출 (권장 경로)
+    2차: 실패 시 Cloudflare Worker 프록시로 폴백
+    - 응답은 _normalize_nlk_record()로 정규화해 DETAIL_LINK 포함
     """
     if not keyword:
         return []
 
-    # 1) 프록시 우선
+    # ---------- 1) Open API 직접 호출 ----------
+    # Secrets: NLK_OPENAPI_KEY 우선, 없으면 NLK_CERT_KEY(과거 키) 폴백
+    api_key = st.secrets.get("NLK_OPENAPI_KEY") or st.secrets.get("NLK_CERT_KEY")
+    if api_key:
+        url = "https://www.nl.go.kr/NL/search/openApi/search.do"
+        params = {
+            "key": api_key,
+            "apiType": "json",
+            "srchTarget": "total",
+            "kwd": keyword,
+            "pageNum": 1,
+            "pageSize": 10,
+        }
+        headers = {"User-Agent": "Mozilla/5.0 (Streamlit OpenAPI Client)"}
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=12)
+            data = r.json()
+            rows = _extract_list_from_any(data)
+            if rows:
+                return [_normalize_nlk_record(rec) for rec in rows]
+        except Exception as e:
+            # 계속해서 프록시로 폴백 시도
+            st.info(f"Open API 직접 호출 실패: {e}")
+
+    # ---------- 2) Cloudflare Worker 프록시 폴백 ----------
     proxy_base = st.secrets.get("NLK_PROXY_BASE", "").rstrip("/")
     if proxy_base:
         try:
@@ -215,34 +240,14 @@ def call_nlk_api(keyword: str):
             )
             raw = r.json()
             rows = _extract_list_from_any(raw)
-            return [_normalize_nlk_record(rec) for rec in rows]
+            if rows:
+                return [_normalize_nlk_record(rec) for rec in rows]
         except Exception as e:
-            st.info(f"프록시 실패: {e}")
+            st.warning(f"프록시 호출도 실패: {e}")
 
-    # 2) Open API 직접 호출
-    api_key = st.secrets.get("NLK_OPENAPI_KEY") or st.secrets.get("NLK_CERT_KEY")
-    if not api_key:
-        st.error("Secrets에 NLK_OPENAPI_KEY (또는 NLK_CERT_KEY)가 없습니다.")
-        return []
+    # 둘 다 실패 또는 결과 없음
+    return []
 
-    url = "https://www.nl.go.kr/NL/search/openApi/search.do"
-    params = {
-        "key": api_key,
-        "apiType": "json",
-        "srchTarget": "total",
-        "kwd": keyword,
-        "pageNum": 1,
-        "pageSize": 10
-    }
-    headers = {"User-Agent": "Mozilla/5.0 (Streamlit App)"}
-    try:
-        r = requests.get(url, params=params, headers=headers, timeout=12)
-        data = r.json()
-        rows = _extract_list_from_any(data)
-        return [_normalize_nlk_record(rec) for rec in rows]
-    except Exception as e:
-        st.warning(f"국립중앙도서관 Open API 호출 오류: {e}")
-        return []
 
 def aladin_cover_from_isbn(isbn: str):
     """간단 커버 URL 추정(성공 보장 X) - 없으면 빈 문자열"""
