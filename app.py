@@ -90,49 +90,30 @@ def _normalize_docs(docs):
     return out
 
 def call_nlk_api(keyword: str):
+    """Cloudflare Worker 프록시만 사용 (DETAIL_LINK는 Worker가 주입)"""
     if not keyword:
         return []
 
-    # 1) 프록시(Cloudflare Worker 등) 우선 시도
     proxy_base = st.secrets.get("NLK_PROXY_BASE", "").rstrip("/")
-    if proxy_base:
-        try:
-            r = requests.get(
-                f"{proxy_base}/",
-                params={"title": keyword, "page_no": 1, "page_size": 10},
-                timeout=10,
-                headers={"User-Agent": "Mozilla/5.0 (Streamlit App via Proxy)"}
-            )
-            data = r.json()
-            docs = data.get("docs", []) if isinstance(data, dict) else data
-            if isinstance(docs, list):
-                return _normalize_docs(docs)
-        except Exception as e:
-            st.info(f"프록시 실패: {e}")
-
-    # 2) (폴백) 직접 호출 — Cloud에선 여전히 타임아웃 가능
-    try:
-        cert_key = st.secrets["NLK_CERT_KEY"]
-    except KeyError:
-        st.error("Secrets에 NLK_CERT_KEY 없음")
+    if not proxy_base:
+        st.error("Secrets에 NLK_PROXY_BASE가 없습니다. Cloudflare Worker 주소를 NLK_PROXY_BASE로 추가해 주세요.")
         return []
 
-    url = "https://www.nl.go.kr/seoji/SearchApi.do"
-    params = {
-        "cert_key": cert_key,
-        "result_style": "json",
-        "page_no": 1,
-        "page_size": 10,
-        "title": keyword
-    }
-    headers = {"User-Agent": "Mozilla/5.0 (Streamlit App)"}
     try:
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r = requests.get(
+            f"{proxy_base}/",
+            params={"title": keyword, "page_no": 1, "page_size": 10},
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0 (Streamlit App via Proxy)"}
+        )
         data = r.json()
-        docs = data.get("docs", []) or []
-        return _normalize_docs(docs)
+        # Worker가 { docs: [...] } 형태로 내려줌 (각 아이템에 DETAIL_LINK 포함)
+        docs = data.get("docs", []) if isinstance(data, dict) else data
+        if not isinstance(docs, list):
+            return []
+        return docs
     except Exception as e:
-        st.warning(f"NLK 직접 호출 오류: {e}")
+        st.error(f"프록시 호출 오류: {e}")
         return []
 
 def aladin_cover_from_isbn(isbn: str):
