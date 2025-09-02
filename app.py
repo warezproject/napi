@@ -46,8 +46,12 @@ def search_jndi(records, keyword: str):
                     break
     return matched
 
-def call_nlk_api(keyword: str):
-    """서버사이드에서 국립중앙도서관 API 호출 (키는 st.secrets에 보관)"""
+def call_nlk_api_simple(keyword: str):
+    """
+    이전에 성공했던 방식 그대로: 단순 GET + r.json()
+    - raise_for_status 사용 안 함
+    - User-Agent 헤더만 추가
+    """
     if not keyword:
         return []
     try:
@@ -62,14 +66,20 @@ def call_nlk_api(keyword: str):
         "result_style": "json",
         "page_no": 1,
         "page_size": 10,
-        "title": keyword
+        "title": keyword or ""
     }
+    headers = {"User-Agent": "Mozilla/5.0 (Streamlit App)"}
+
     try:
-        r = requests.get(url, params=params, timeout=30)
-        r.raise_for_status()
-        data = r.json()
+        # '예전에 문제 없던' 스타일 유지: timeout=10, raise_for_status() 호출 안 함
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        try:
+            data = r.json()
+        except Exception:
+            return []
         return data.get("docs", []) or []
     except Exception as e:
+        # 네트워크 타임아웃/연결 문제는 여기로 들어옴
         st.warning(f"국립중앙도서관 API 호출 오류: {e}")
         return []
 
@@ -81,9 +91,10 @@ def aladin_cover_from_isbn(isbn: str):
     return f"https://image.aladin.co.kr/product/{isbn[-3:]}/{isbn[-5:]}cover.jpg"
 
 # -----------------------------
-# 데이터 로드
+# 데이터 로드 (실제 파일명에 맞춤)
 # -----------------------------
-jndi_all, jndi_meta = load_jndi_json(Path("static/전남연구원.json"))
+# 주의: static/전남연구원.json → static/전남연구원_자료.json 로 수정
+jndi_all, jndi_meta = load_jndi_json(Path("static/전남연구원_자료.json"))
 
 # -----------------------------
 # 검색 실행
@@ -92,8 +103,8 @@ if submitted:
     # 전남연구원 검색
     jndi_hits = search_jndi(jndi_all, kw)
 
-    # NLK API 검색
-    nlk_docs = call_nlk_api(kw)
+    # NLK API 검색 (단순 호출 버전)
+    nlk_docs = call_nlk_api_simple(kw)
 
     # -----------------------------
     # 결과 표시
