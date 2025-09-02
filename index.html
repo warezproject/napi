@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>국가정보정책협의회 TEST</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-800">
+<!-- Header -->
+<header class="bg-white shadow p-4 flex flex-col sm:flex-row items-center justify-between">
+<h1 class="text-2xl font-bold text-blue-700">국가정보정책협의회 TEST</h1>
+<input id="searchInput" type="text" placeholder="도서 제목을 입력하세요..." class="mt-2 sm:mt-0 w-full sm:w-1/3 border border-gray-300 p-2 rounded" />
+<button onclick="searchBooks()" class="mt-2 sm:mt-0 ml-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">검색</button>
+</header>
+
+<!-- Main Section -->
+<main class="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+<!-- 전남연구원 -->
+<a href="https://www.jndi.re.kr/" target="_blank" class="bg-white shadow rounded p-4 hover:ring-2 ring-blue-400 transition">
+<img src="/app/static/jndi_logo.png" alt="전남연구원 CI" class="w-full h-32 object-contain mb-2"/>
+<p class="text-center text-sm font-medium">전남연구원</p>
+</a>
+<!-- 광주연구원 -->
+<a href="https://www.gri.re.kr/" target="_blank" class="bg-white shadow rounded p-4 hover:ring-2 ring-blue-400 transition">
+  <img src="/app/static/gri_logo.png" alt="광주연구원 CI" class="w-full h-32 object-contain mb-2"/>
+  <p class="text-center text-sm font-medium">광주연구원</p>
+</a>
+
+<!-- 국토연구원 -->
+<a href="https://www.krihs.re.kr/" target="_blank" class="bg-white shadow rounded p-4 hover:ring-2 ring-blue-400 transition">
+  <img src="/app/static/krihs_logo.png" alt="국토연구원 CI" class="w-full h-32 object-contain mb-2"/>
+  <p class="text-center text-sm font-medium">국토연구원</p>
+</a>
+
+<!-- 한국교육개발원 -->
+<a href="https://www.kedi.re.kr/" target="_blank" class="bg-white shadow rounded p-4 hover:ring-2 ring-blue-400 transition">
+  <img src="/app/static/kedi_logo.jpg" alt="한국교육개발원 CI" class="w-full h-32 object-contain mb-2"/>
+  <p class="text-center text-sm font-medium">한국교육개발원</p>
+</a>
+
+<!-- 알라딘 -->
+<a href="https://www.aladin.co.kr" target="_blank" class="bg-white shadow rounded p-4 hover:ring-2 ring-blue-400 transition">
+  <img src="/app/static/aladin_logo.png" alt="알라딘 CI" class="w-full h-32 object-contain mb-2"/>
+  <p class="text-center text-sm font-medium">알라딘</p>
+</a>
+
+<!-- 국립중앙도서관 -->
+<a href="https://www.nl.go.kr" target="_blank" class="bg-white shadow rounded p-4 hover:ring-2 ring-blue-400 transition">
+  <img src="/app/static/nlk_logo.png" alt="국립중앙도서관 CI" class="w-full h-32 object-contain mb-2"/>
+  <p class="text-center text-sm font-medium">국립중앙도서관</p>
+</a>
+</main>
+
+<!-- 검색 결과 출력 영역 -->
+<section class="p-6">
+<h2 class="text-xl font-bold mb-4 text-green-700">전남연구원 검색 결과</h2>
+<div id="jndiResults" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-10"></div>
+<h2 class="text-xl font-bold mb-4 text-blue-700">국립중앙도서관 검색 결과</h2>
+<div id="nlkResults" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+</section>
+
+<!-- Footer -->
+<footer class="text-center text-xs text-gray-500 p-4">
+© 2025 국가정보정책협의회 TEST. All rights reserved.
+</footer>
+
+<script>
+function searchBooks() {
+const keyword = document.getElementById('searchInput').value;
+const jndiContainer = document.getElementById('jndiResults');
+const nlkContainer = document.getElementById('nlkResults');
+jndiContainer.innerHTML = '';
+nlkContainer.innerHTML = '';
+ // 전남연구원 JSON 데이터 검색
+  fetch('/app/static/전남연구원_자료.json')
+    .then(res => res.json())
+    .then(jndiData => {
+      const matched = jndiData.filter(item =>
+        item['서명'] && item['서명'].includes(keyword)
+      );
+
+      matched.forEach(book => {
+        const card = document.createElement('div');
+        card.className = 'bg-white shadow p-4 rounded border border-green-400';
+
+        card.innerHTML = `
+          <h3 class="text-lg font-bold mb-1">${book['서명']}</h3>
+          <p class="text-sm text-gray-700">저자: ${book['저자'] || '정보 없음'}</p>
+          <p class="text-sm text-gray-700">발행자: ${book['발행자'] || '정보 없음'}</p>
+          <p class="text-sm text-gray-700">발행년도: ${book['발행년도'] || '정보 없음'}</p>
+          <p class="text-sm text-gray-500">등록번호: ${book['등록번호']}</p>
+          <span class="inline-block mt-2 text-xs text-green-600 font-medium">출처: 전남연구원</span>
+        `;
+        jndiContainer.appendChild(card);
+      });
+    });
+
+  fetch(`https://www.nl.go.kr/seoji/SearchApi.do?cert_key=REMOVED_NLK_KEY&result_style=json&page_no=1&page_size=10&title=${encodeURIComponent(keyword)}`)
+    .then(res => res.json())
+    .then(data => {
+      if (data.docs && data.docs.length > 0) {
+        data.docs.forEach(book => {
+          const isbn = book.ISBN || '';
+          const linkUrl = `https://www.nl.go.kr/search/searchResult.jsp?category=total&kwd=${encodeURIComponent(book.TITLE || '')}`;
+          const imageUrl = isbn ? `https://image.aladin.co.kr/product/${isbn.slice(-3)}/${isbn.slice(-5)}cover.jpg` : '';
+
+          const card = document.createElement('a');
+          card.className = 'bg-white shadow p-4 rounded hover:ring-2 ring-blue-400 transition';
+          card.href = linkUrl;
+          card.target = '_blank';
+          card.innerHTML = `
+            ${imageUrl ? `<img src="${imageUrl}" alt="도서 표지" class="w-full h-48 object-contain mb-3"/>` : ''}
+            <h3 class="text-lg font-bold mb-1">${book.TITLE || '제목 없음'}</h3>
+            <p class="text-sm text-gray-700">저자: ${book.AUTHOR || '정보 없음'}</p>
+            <p class="text-sm text-gray-700">출판사: ${book.PUBLISHER || '정보 없음'}</p>
+            <p class="text-sm text-gray-700">발행년도: ${book.PUBLISH_YEAR || '정보 없음'}</p>
+            <p class="text-sm text-gray-500">ISBN: ${isbn}</p>
+          `;
+          nlkContainer.appendChild(card);
+        });
+      } else {
+        nlkContainer.innerHTML = '<p class="text-center col-span-full text-gray-500">검색 결과가 없습니다.</p>';
+      }
+    })
+    .catch(err => {
+      console.error(err);
+      nlkContainer.innerHTML = '<p class="text-center col-span-full text-red-500">API 요청 실패</p>';
+    });
+}
+</script>
+</body>
+</html>
