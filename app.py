@@ -350,112 +350,96 @@ jndi_all, jndi_meta = load_jndi_json_best_effort()
 # 검색 실행
 # -----------------------------
 # -----------------------------
-# 검색 실행
+# 검색 실행 (submitted에 의존하지 않음)
 # -----------------------------
-if submitted:
-    PAGE_SIZE = 10
+PAGE_SIZE = 10
+active_kw = st.session_state.query  # 세션의 검색어로 항상 렌더링
 
-    # 전남연구원 검색
-    jndi_hits = search_jndi(jndi_all, active_kw)
-    jndi_total = len(jndi_hits)
-    jndi_total_pages = max(1, (jndi_total + PAGE_SIZE - 1) // PAGE_SIZE)
+# ===== 전남연구원 =====
+jndi_all, jndi_meta = load_jndi_json_best_effort()
+jndi_hits = search_jndi(jndi_all, active_kw)
+jndi_total = len(jndi_hits)
+jndi_total_pages = max(1, (jndi_total + PAGE_SIZE - 1) // PAGE_SIZE)
 
-    # 현재 페이지 슬라이스
-    jndi_page = st.session_state.jndi_page
-    j_start = (jndi_page - 1) * PAGE_SIZE
-    j_end = j_start + PAGE_SIZE
-    jndi_page_data = jndi_hits[j_start:j_end]
+# 세션의 현재 페이지 → 로컬 변수로 복사
+jndi_page = st.session_state.jndi_page
+nlk_page  = st.session_state.nlk_page
 
-    # 세션 상태 초기화
-    if "jndi_page" not in st.session_state:
-        st.session_state.jndi_page = 1
-    if "nlk_page" not in st.session_state:
-        st.session_state.nlk_page = 1
+# 현재 페이지 슬라이스 (전남연구원)
+j_start = (jndi_page - 1) * PAGE_SIZE
+j_end   = j_start + PAGE_SIZE
+jndi_page_data = jndi_hits[j_start:j_end]
 
-    # 로컬 변수로 받아서 아래에서 사용 (NameError 방지)
-    jndi_page = st.session_state.jndi_page
-    nlk_page = st.session_state.nlk_page
+# ===== 국립중앙도서관 =====
+nlk_docs, nlk_total = call_nlk_api(active_kw, page_num=nlk_page, page_size=PAGE_SIZE)
+nlk_total_pages = max(1, (nlk_total + PAGE_SIZE - 1) // PAGE_SIZE)
 
-    # 현재 페이지 슬라이스 (전남연구원)
-    j_start = (jndi_page - 1) * PAGE_SIZE
-    j_end = j_start + PAGE_SIZE
-    jndi_page_data = jndi_hits[j_start:j_end]
+# -----------------------------
+# 결과 표시
+# -----------------------------
+st.write("---")
+layout_cols = st.columns([1, 1])  # 좌/우 레이아웃는 별도 변수 이름 사용
 
-    # ===== 국립중앙도서관 =====
-    nlk_page = st.session_state.nlk_page
-    nlk_docs, nlk_total = call_nlk_api(active_kw, page_num=nlk_page, page_size=PAGE_SIZE)
-    nlk_total_pages = max(1, (nlk_total + PAGE_SIZE - 1) // PAGE_SIZE)
-    # -----------------------------
-    # 결과 표시 (한 번만)
-    # -----------------------------
-    st.write("---")
-    cols = st.columns([1, 1])
+# 전남연구원
+with layout_cols[0]:
+    st.subheader("전남연구원 검색 결과")
+    st.caption(f"총 {jndi_total}건 / 현재 페이지 {jndi_page}/{jndi_total_pages}")
 
-    # 전남연구원
-    with cols[0]:
-        st.subheader("전남연구원 검색 결과")
-        st.caption(f"총 {jndi_total}건 / 현재 페이지 {jndi_page}/{jndi_total_pages}")
+    if jndi_page_data:
+        for b in jndi_page_data:
+            with st.container(border=True):
+                title = b.get('서명') or b.get('서명 ') or b.get('Title') or b.get('제목') or ''
+                st.markdown(f"**{title}**")
+                st.caption(
+                    f"저자: {b.get('저자','정보 없음')} · "
+                    f"발행자: {b.get('발행자','정보 없음')} · "
+                    f"발행년도: {b.get('발행년도','정보 없음')}"
+                )
+    else:
+        st.info("검색 결과가 없습니다.")
 
-        if jndi_page_data:
-            for b in jndi_page_data:
-                with st.container(border=True):
-                    title = b.get('서명') or b.get('서명 ') or b.get('Title') or b.get('제목') or ''
+    # --- 페이지네이션 (하단) ---
+    if jndi_total_pages > 1:
+        st.write("")
+        start_page = max(1, jndi_page - 2)
+        end_page   = min(jndi_total_pages, jndi_page + 2)
+        pcols_jndi = st.columns(end_page - start_page + 1)  # 레이아웃 cols와 이름 다르게!
+        for i, p in enumerate(range(start_page, end_page + 1)):
+            label = f"**{p}**" if p == jndi_page else str(p)
+            if pcols_jndi[i].button(label, key=f"jndi_page_{p}"):
+                st.session_state.jndi_page = p
+                st.rerun()
+
+# 국립중앙도서관
+with layout_cols[1]:
+    st.subheader("국립중앙도서관 검색 결과")
+    st.caption(f"총 {nlk_total}건 / 현재 페이지 {nlk_page}/{nlk_total_pages}")
+
+    if nlk_docs:
+        for d in nlk_docs:
+            with st.container(border=True):
+                title = d.get("TITLE", "제목 없음")
+                link  = d.get("DETAIL_LINK") or ""
+                if link:
+                    st.markdown(f"**[{title}]({link})**")
+                else:
                     st.markdown(f"**{title}**")
-                    st.caption(
-                        f"저자: {b.get('저자','정보 없음')} · "
-                        f"발행자: {b.get('발행자','정보 없음')} · "
-                        f"발행년도: {b.get('발행년도','정보 없음')}"
-                    )
-        else:
-            st.info("검색 결과가 없습니다.")
+                st.caption(
+                    f"저자: {d.get('AUTHOR','정보 없음')} · "
+                    f"출판사: {d.get('PUBLISHER','정보 없음')} · "
+                    f"발행년도: {d.get('PUBLISH_YEAR','정보 없음')}"
+                )
+    else:
+        st.info("검색 결과가 없습니다.")
 
-        # --- 페이지네이션 (하단) ---
-# --- 전남연구원 페이지네이션 (결과 리스트 아래) ---
-        if jndi_total_pages > 1:
-            st.write("")
-            start_page = max(1, jndi_page - 2)
-            end_page = min(jndi_total_pages, jndi_page + 2)
-            cols = st.columns(end_page - start_page + 1)
-            for i, p in enumerate(range(start_page, end_page + 1)):
-                label = f"**{p}**" if p == jndi_page else str(p)
-                if cols[i].button(label, key=f"jndi_page_{p}"):
-                    st.session_state.jndi_page = p
-                    st.rerun()
-
-    # 국립중앙도서관
-    with cols[1]:
-        st.subheader("국립중앙도서관 검색 결과")
-        st.caption(f"총 {nlk_total}건 / 현재 페이지 {nlk_page}/{nlk_total_pages}")
-
-        if nlk_docs:
-            for d in nlk_docs:
-                with st.container(border=True):
-                    title = d.get("TITLE", "제목 없음")
-                    link = d.get("DETAIL_LINK") or ""
-                    if link:
-                        st.markdown(f"**[{title}]({link})**")
-                    else:
-                        st.markdown(f"**{title}**")
-                    st.caption(
-                        f"저자: {d.get('AUTHOR','정보 없음')} · "
-                        f"출판사: {d.get('PUBLISHER','정보 없음')} · "
-                        f"발행년도: {d.get('PUBLISH_YEAR','정보 없음')}"
-                    )
-        else:
-            st.info("검색 결과가 없습니다.")
-
-        # --- 페이지네이션 (하단) ---
-# --- 국립중앙도서관 페이지네이션 (결과 리스트 아래) ---
-        if nlk_total_pages > 1:
-            st.write("")
-            start_page = max(1, nlk_page - 2)
-            end_page = min(nlk_total_pages, nlk_page + 2)
-            cols = st.columns(end_page - start_page + 1)
-            for i, p in enumerate(range(start_page, end_page + 1)):
-                label = f"**{p}**" if p == nlk_page else str(p)
-                if cols[i].button(label, key=f"nlk_page_{p}"):
-                    st.session_state.nlk_page = p
-                    st.rerun()
-
-else:
-    st.info("상단 입력창에 검색어를 입력하고 **검색** 버튼을 눌러주세요.")
+    # --- 페이지네이션 (하단) ---
+    if nlk_total_pages > 1:
+        st.write("")
+        start_page = max(1, nlk_page - 2)
+        end_page   = min(nlk_total_pages, nlk_page + 2)
+        pcols_nlk  = st.columns(end_page - start_page + 1)  # 레이아웃 cols와 이름 다르게!
+        for i, p in enumerate(range(start_page, end_page + 1)):
+            label = f"**{p}**" if p == nlk_page else str(p)
+            if pcols_nlk[i].button(label, key=f"nlk_page_{p}"):
+                st.session_state.nlk_page = p
+                st.rerun()
