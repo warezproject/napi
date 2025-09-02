@@ -6,20 +6,51 @@ import xml.etree.ElementTree as ET
 import requests
 import streamlit as st
 
+
 # -----------------------------
 # 기본 설정
 # -----------------------------
 st.set_page_config(page_title="국가정보정책협의회 TEST", layout="wide")
-
 st.title("국가정보정책협의회 TEST")
 st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 Open API")
+
+
+# -----------------------------
+# 세션 상태 초기화
+# -----------------------------
+if "query" not in st.session_state:
+    st.session_state.query = ""   # 마지막 검색어
+if "jndi_page" not in st.session_state:
+    st.session_state.jndi_page = 1
+if "nlk_page" not in st.session_state:
+    st.session_state.nlk_page = 1
 
 # -----------------------------
 # 입력 UI
 # -----------------------------
 with st.form("search_form", clear_on_submit=False):
-    kw = st.text_input("도서 제목을 입력하세요", value="", placeholder="예: 딥러닝, LLM, 인공지능 …")
+    # 입력창 value를 세션값으로 유지
+    kw = st.text_input("도서 제목을 입력하세요", value=st.session_state.query, placeholder="예: 딥러닝, LLM, 인공지능 …")
     submitted = st.form_submit_button("검색")
+
+if submitted:
+    st.session_state.query = kw.strip()
+    st.session_state.jndi_page = 1
+    st.session_state.nlk_page = 1
+    st.rerun()
+
+# -----------------------------
+# 검색어 없는 경우 초기 화면
+# -----------------------------
+if not st.session_state.query:
+    st.info("상단 입력창에 검색어를 입력하고 **검색** 버튼을 눌러주세요.")
+    st.stop()
+
+# -----------------------------
+# 여기부터는 항상 세션의 query 사용
+# -----------------------------
+PAGE_SIZE = 10
+active_kw = st.session_state.query
 
 # -----------------------------
 # 전남연구원 로컬 JSON 로딩
@@ -324,10 +355,16 @@ jndi_all, jndi_meta = load_jndi_json_best_effort()
 if submitted:
     PAGE_SIZE = 10
 
-    # ===== 전남연구원 =====
-    jndi_hits = search_jndi(jndi_all, kw)
+    # 전남연구원 검색
+    jndi_hits = search_jndi(jndi_all, active_kw)
     jndi_total = len(jndi_hits)
     jndi_total_pages = max(1, (jndi_total + PAGE_SIZE - 1) // PAGE_SIZE)
+
+    # 현재 페이지 슬라이스
+    jndi_page = st.session_state.jndi_page
+    j_start = (jndi_page - 1) * PAGE_SIZE
+    j_end = j_start + PAGE_SIZE
+    jndi_page_data = jndi_hits[j_start:j_end]
 
     # 세션 상태 초기화
     if "jndi_page" not in st.session_state:
@@ -345,9 +382,9 @@ if submitted:
     jndi_page_data = jndi_hits[j_start:j_end]
 
     # ===== 국립중앙도서관 =====
-    nlk_docs, nlk_total = call_nlk_api(kw, page_num=nlk_page, page_size=PAGE_SIZE)
+    nlk_page = st.session_state.nlk_page
+    nlk_docs, nlk_total = call_nlk_api(active_kw, page_num=nlk_page, page_size=PAGE_SIZE)
     nlk_total_pages = max(1, (nlk_total + PAGE_SIZE - 1) // PAGE_SIZE)
-
     # -----------------------------
     # 결과 표시 (한 번만)
     # -----------------------------
@@ -373,16 +410,17 @@ if submitted:
             st.info("검색 결과가 없습니다.")
 
         # --- 페이지네이션 (하단) ---
+# --- 전남연구원 페이지네이션 (결과 리스트 아래) ---
         if jndi_total_pages > 1:
             st.write("")
             start_page = max(1, jndi_page - 2)
             end_page = min(jndi_total_pages, jndi_page + 2)
-            cols_p = st.columns(end_page - start_page + 1)
+            cols = st.columns(end_page - start_page + 1)
             for i, p in enumerate(range(start_page, end_page + 1)):
                 label = f"**{p}**" if p == jndi_page else str(p)
-                if cols_p[i].button(label, key=f"jndi_page_{p}"):
+                if cols[i].button(label, key=f"jndi_page_{p}"):
                     st.session_state.jndi_page = p
-                    st.experimental_rerun()
+                    st.rerun()
 
     # 국립중앙도서관
     with cols[1]:
@@ -407,15 +445,17 @@ if submitted:
             st.info("검색 결과가 없습니다.")
 
         # --- 페이지네이션 (하단) ---
+# --- 국립중앙도서관 페이지네이션 (결과 리스트 아래) ---
         if nlk_total_pages > 1:
             st.write("")
             start_page = max(1, nlk_page - 2)
             end_page = min(nlk_total_pages, nlk_page + 2)
-            cols_p = st.columns(end_page - start_page + 1)
+            cols = st.columns(end_page - start_page + 1)
             for i, p in enumerate(range(start_page, end_page + 1)):
                 label = f"**{p}**" if p == nlk_page else str(p)
-                if cols_p[i].button(label, key=f"nlk_page_{p}"):
+                if cols[i].button(label, key=f"nlk_page_{p}"):
                     st.session_state.nlk_page = p
-                    st.experimental_rerun()
+                    st.rerun()
+
 else:
     st.info("상단 입력창에 검색어를 입력하고 **검색** 버튼을 눌러주세요.")
