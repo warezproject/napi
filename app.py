@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from urllib.parse import quote_plus
 import re
+import xml.etree.ElementTree as ET
 import requests
 import streamlit as st
 
@@ -11,7 +12,7 @@ import streamlit as st
 st.set_page_config(page_title="국가정보정책협의회 TEST", layout="wide")
 
 st.title("국가정보정책협의회 TEST")
-st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 API (상세페이지 직링크 강화)")
+st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 Open API (ISBN 2차 조회로 상세링크 보강)")
 
 # -----------------------------
 # 입력 UI
@@ -21,7 +22,7 @@ with st.form("search_form", clear_on_submit=False):
     submitted = st.form_submit_button("검색")
 
 # -----------------------------
-# 헬퍼 함수
+# 전남연구원 로컬 JSON 로딩
 # -----------------------------
 @st.cache_data(show_spinner=False)
 def load_jndi_json_best_effort():
@@ -63,11 +64,12 @@ def search_jndi(records, keyword: str):
                 break
     return matched
 
-# ---------- NLK 응답 정규화 & 상세 링크 빌더(강화판) ----------
+# -----------------------------
+# NLK Open API 헬퍼
+# -----------------------------
 _ISBN_RE = re.compile(r"[0-9Xx\-]{10,17}")
 
 def _get_first(rec: dict, keys: tuple) -> str:
-    """정확한 키 목록으로 우선 탐색(대소문자 변형 포함)"""
     if not isinstance(rec, dict):
         return ""
     for k in keys:
@@ -78,7 +80,6 @@ def _get_first(rec: dict, keys: tuple) -> str:
     return ""
 
 def _get_by_substring(rec: dict, substrings: tuple) -> str:
-    """키 이름에 특정 문자열이 포함되면 그 값을 채택(가장 먼저 발견되는 값)"""
     if not isinstance(rec, dict):
         return ""
     for key, val in rec.items():
@@ -91,18 +92,14 @@ def _get_by_substring(rec: dict, substrings: tuple) -> str:
     return ""
 
 def _extract_isbn(rec: dict) -> str:
-    # 우선 알려진 키들
     isbn = _get_first(rec, ("ISBN", "isbn", "isbn13", "ISBN13", "ea_isbn", "EA_ISBN", "set_isbn", "SET_ISBN"))
     if not isbn:
-        # 키 이름에 'isbn'이 들어가면 그 값 사용
         isbn = _get_by_substring(rec, ("isbn",))
     if not isbn:
         return ""
-    # 숫자/하이픈/X만 남기고 후보 추출
     m = _ISBN_RE.findall(isbn)
     if not m:
         return ""
-    # 13자리 우선, 없으면 10자리
     candidates = [re.sub(r"[^0-9Xx]", "", s) for s in m]
     for c in candidates:
         if len(c) == 13:
@@ -110,15 +107,12 @@ def _extract_isbn(rec: dict) -> str:
     for c in candidates:
         if len(c) == 10:
             return c
-    # 길이가 애매하면 원문 반환
     return candidates[0] if candidates else isbn
 
 def _extract_cn(rec: dict) -> str:
-    # 대표 키들
     cn = _get_first(rec, ("CN", "cn", "control_no", "CONTROL_NO", "controlNo", "CONTROLNO", "docid", "DOCID", "doc_id", "DOC_ID", "bib_id", "BIB_ID"))
     if cn:
         return str(cn).strip()
-    # 키 이름에 control 또는 cn이 포함되면 사용
     cn = _get_by_substring(rec, ("control", "cn"))
     return str(cn).strip() if cn else ""
 
@@ -126,7 +120,6 @@ def _extract_detail_link(rec: dict) -> str:
     # 1) detail_link / link / url 류 우선
     detail = _get_first(rec, ("detail_link", "DETAIL_LINK", "link", "LINK", "url", "URL"))
     if not detail:
-        # 키 이름에 link/url이 들어가면 사용
         detail = _get_by_substring(rec, ("detail_link", "link", "url"))
     if detail:
         if detail.startswith("/"):
@@ -140,14 +133,13 @@ def _extract_detail_link(rec: dict) -> str:
     cn = _extract_cn(rec)
     if cn:
         return f"https://www.nl.go.kr/search/SearchDetail.do?cn={quote_plus(cn)}"
-    # 3) 최후 폴백: 제목검색(어쩔 수 없음)
+    # 3) 최후 폴백: 제목검색
     title = _get_first(rec, ("title_info", "TITLE", "title"))
     if title:
         return f"https://www.nl.go.kr/search/searchResult.jsp?category=total&kwd={quote_plus(title)}"
     return "https://www.nl.go.kr"
 
 def _normalize_nlk_record(rec: dict) -> dict:
-    """응답을 앱 공통 스키마로 정규화"""
     title = _get_first(rec, ("title_info", "TITLE", "title")) or "제목 없음"
     author = _get_first(rec, ("author_info", "AUTHOR", "author")) or "정보 없음"
     publisher = _get_first(rec, ("pub_info", "PUBLISHER", "publisher")) or "정보 없음"
@@ -155,7 +147,6 @@ def _normalize_nlk_record(rec: dict) -> dict:
     isbn = _extract_isbn(rec)
     link = _extract_detail_link(rec)
     control_no = _extract_cn(rec)
-
     return {
         "TITLE": title,
         "AUTHOR": author,
@@ -164,27 +155,23 @@ def _normalize_nlk_record(rec: dict) -> dict:
         "ISBN": isbn,
         "DETAIL_LINK": link,
         "CONTROL_NO": control_no,
-        "_raw": rec,  # (디버그용) 필요 시 st.json으로 확인 가능
+        "_raw": rec,
     }
 
-def _extract_list_from_any(data: dict):
-    """응답 루트에서 list를 최대한 유연하게 추출"""
+def _extract_list_from_any(data):
     if isinstance(data, list):
         return data
     if not isinstance(data, dict):
         return []
-    # 자주 보이는 케이스
     for k in ("docs", "result", "items", "list", "seoji", "data"):
         v = data.get(k)
         if isinstance(v, list):
             return v
-        # 종종 {"result":{"docs":[...]}} 처럼 중첩됨
         if isinstance(v, dict):
             for kk in ("docs", "items", "list", "data"):
                 vv = v.get(kk)
                 if isinstance(vv, list):
                     return vv
-    # 마지막으로 dict의 값 중 첫 리스트를 찾음
     for v in data.values():
         if isinstance(v, list):
             return v
@@ -194,19 +181,83 @@ def _extract_list_from_any(data: dict):
                     return vv
     return []
 
-# ---------- NLK 호출 ----------
+# -----------------------------
+# (중요) ISBN으로 2차 XML 조회하여 detail_link 보강
+# -----------------------------
+@st.cache_data(show_spinner=False)
+def fetch_detail_link_by_isbn(isbn: str, api_key: str, timeout: int = 12) -> str:
+    """
+    OpenAPI XML (detailSearch=true & isbnOp=isbn & isbnCode=...)로 재조회하여
+    <result><item><detail_link>의 첫 값을 절대 URL로 반환. 실패 시 빈 문자열.
+    """
+    if not isbn or not api_key:
+        return ""
+    url = "https://www.nl.go.kr/NL/search/openApi/search.do"
+    # XML 응답 강제: apiType=xml
+    params = {
+        "key": api_key,
+        "detailSearch": "true",
+        "isbnOp": "isbn",
+        "isbnCode": isbn,
+        "apiType": "xml",
+        "pageNum": 1,
+        "pageSize": 10
+    }
+    headers = {"User-Agent": "Mozilla/5.0 (Streamlit OpenAPI XML Client)"}
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=timeout)
+        r.raise_for_status()
+        # XML 파싱
+        root = ET.fromstring(r.text)
+        # XPath 유연 탐색
+        items = root.findall(".//result/item")
+        for it in items:
+            dl = it.findtext("detail_link", default="").strip()
+            if dl:
+                return f"https://www.nl.go.kr{dl}" if dl.startswith("/") else dl
+        return ""
+    except Exception:
+        return ""
+
+def _is_search_fallback(link: str) -> bool:
+    """현재 링크가 searchResult.jsp 형태의 폴백인지 검사"""
+    if not link:
+        return True
+    return "searchResult.jsp" in link
+
+def _enrich_links_with_isbn(records: list, api_key: str) -> list:
+    """
+    각 레코드의 DETAIL_LINK가 폴백(searchResult.jsp)이거나 비었고,
+    ISBN이 있으면 2차 XML 호출로 detail_link 보강.
+    """
+    if not isinstance(records, list) or not api_key:
+        return records
+    out = []
+    for rec in records:
+        link = rec.get("DETAIL_LINK") or ""
+        isbn = (rec.get("ISBN") or "").strip()
+        if isbn and _is_search_fallback(link):
+            fixed = fetch_detail_link_by_isbn(isbn, api_key)
+            if fixed:
+                rec = {**rec, "DETAIL_LINK": fixed}
+        out.append(rec)
+    return out
+
+# -----------------------------
+# NLK 호출: 1차 OpenAPI(JSON) → 2차 XML 보강 → (실패 시) 프록시 폴백
+# -----------------------------
 def call_nlk_api(keyword: str):
     """
-    1차: 국립중앙도서관 Open API(search.do) 직접 호출 (권장 경로)
-    2차: 실패 시 Cloudflare Worker 프록시로 폴백
-    - 응답은 _normalize_nlk_record()로 정규화해 DETAIL_LINK 포함
+    1차: OpenAPI(search.do, JSON) 직접 호출
+    2차: 목록의 각 아이템에서 ISBN 발견 시 XML(detailSearch) 재조회 → detail_link 보강
+    3차: (1차가 실패/무결과일 때만) Cloudflare Worker 프록시 폴백
     """
     if not keyword:
         return []
 
-    # ---------- 1) Open API 직접 호출 ----------
-    # Secrets: NLK_OPENAPI_KEY 우선, 없으면 NLK_CERT_KEY(과거 키) 폴백
     api_key = st.secrets.get("NLK_OPENAPI_KEY") or st.secrets.get("NLK_CERT_KEY")
+
+    # ---------- 1) Open API 직접 호출(JSON) ----------
     if api_key:
         url = "https://www.nl.go.kr/NL/search/openApi/search.do"
         params = {
@@ -215,20 +266,22 @@ def call_nlk_api(keyword: str):
             "srchTarget": "total",
             "kwd": keyword,
             "pageNum": 1,
-            "pageSize": 10,
+            "pageSize": 10
         }
         headers = {"User-Agent": "Mozilla/5.0 (Streamlit OpenAPI Client)"}
         try:
             r = requests.get(url, params=params, headers=headers, timeout=12)
             data = r.json()
             rows = _extract_list_from_any(data)
-            if rows:
-                return [_normalize_nlk_record(rec) for rec in rows]
+            records = [_normalize_nlk_record(rec) for rec in rows]
+            if records:
+                # ---------- 2) ISBN으로 detail_link 보강(XML) ----------
+                records = _enrich_links_with_isbn(records, api_key)
+                return records
         except Exception as e:
-            # 계속해서 프록시로 폴백 시도
             st.info(f"Open API 직접 호출 실패: {e}")
 
-    # ---------- 2) Cloudflare Worker 프록시 폴백 ----------
+    # ---------- 3) Cloudflare Worker 프록시 폴백 ----------
     proxy_base = st.secrets.get("NLK_PROXY_BASE", "").rstrip("/")
     if proxy_base:
         try:
@@ -240,17 +293,21 @@ def call_nlk_api(keyword: str):
             )
             raw = r.json()
             rows = _extract_list_from_any(raw)
-            if rows:
-                return [_normalize_nlk_record(rec) for rec in rows]
+            records = [_normalize_nlk_record(rec) for rec in rows]
+            if api_key and records:
+                # 프록시 결과에도 ISBN이 있으면 보강 시도 (가능한 한 상세링크 확보)
+                records = _enrich_links_with_isbn(records, api_key)
+            return records
         except Exception as e:
             st.warning(f"프록시 호출도 실패: {e}")
 
     # 둘 다 실패 또는 결과 없음
     return []
 
-
+# -----------------------------
+# 알라딘 커버 (옵션)
+# -----------------------------
 def aladin_cover_from_isbn(isbn: str):
-    """간단 커버 URL 추정(성공 보장 X) - 없으면 빈 문자열"""
     if not isbn:
         return ""
     return f"https://image.aladin.co.kr/product/{isbn[-3:]}/{isbn[-5:]}cover.jpg"
@@ -264,15 +321,9 @@ jndi_all, jndi_meta = load_jndi_json_best_effort()
 # 검색 실행
 # -----------------------------
 if submitted:
-    # 전남연구원 검색
     jndi_hits = search_jndi(jndi_all, kw)
-
-    # NLK API 검색 (상세 링크 포함)
     nlk_docs = call_nlk_api(kw)
 
-    # -----------------------------
-    # 결과 표시
-    # -----------------------------
     st.write("---")
     cols = st.columns([1, 1])
 
@@ -320,10 +371,7 @@ if submitted:
                         if cover:
                             st.image(cover, use_container_width=True)
 
-        else:
-            st.info("검색 결과가 없습니다.")
-
-    # (선택) 디버그: 첫 결과 원본 확인용
+    # (디버그가 필요하면 아래 주석 해제해서 구조 확인)
     # with st.expander("NLK 첫 건 raw JSON"):
     #     if nlk_docs:
     #         st.json(nlk_docs[0]["_raw"])
