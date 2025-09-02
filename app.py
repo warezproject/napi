@@ -11,7 +11,7 @@ st.set_page_config(page_title="국가정보정책협의회 TEST", layout="wide")
 kw = st.query_params.get("kw", [""])[0].strip()
 
 # 1) 전남연구원 로컬 JSON 로드(존재/레코드 수 확인)
-jndi_json_path = Path("static/전남연구원_자료.json")
+jndi_json_path = Path("static/전남연구원.json")
 jndi_exists = jndi_json_path.exists()
 jndi_total = 0
 jndi_results = []
@@ -34,7 +34,7 @@ if jndi_exists:
     except Exception as e:
         st.warning(f"전남연구원 JSON 읽기 오류: {e}")
 else:
-    st.info("static/전남연구원_자료.json 파일을 찾을 수 없습니다. 이름/경로를 확인해 주세요.")
+    st.info("static/전남연구원.json 파일을 찾을 수 없습니다. 이름/경로를 확인해 주세요.")
 
 # 2) NLK(API) 서버사이드 호출 (Secrets에 NLK_CERT_KEY 필요)
 nlk_docs = []
