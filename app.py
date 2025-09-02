@@ -90,13 +90,13 @@ def _normalize_docs(docs):
     return out
 
 def call_nlk_api(keyword: str):
-    """Cloudflare Worker 프록시만 사용 (DETAIL_LINK는 Worker가 주입)"""
+    """Cloudflare Worker 프록시만 사용(DETAIL_LINK는 Worker가 주입)"""
     if not keyword:
         return []
 
     proxy_base = st.secrets.get("NLK_PROXY_BASE", "").rstrip("/")
     if not proxy_base:
-        st.error("Secrets에 NLK_PROXY_BASE가 없습니다. Cloudflare Worker 주소를 NLK_PROXY_BASE로 추가해 주세요.")
+        st.error("Secrets에 NLK_PROXY_BASE가 없습니다. Cloudflare Worker 주소를 NLK_PROXY_BASE로 추가하세요.")
         return []
 
     try:
@@ -107,14 +107,12 @@ def call_nlk_api(keyword: str):
             headers={"User-Agent": "Mozilla/5.0 (Streamlit App via Proxy)"}
         )
         data = r.json()
-        # Worker가 { docs: [...] } 형태로 내려줌 (각 아이템에 DETAIL_LINK 포함)
         docs = data.get("docs", []) if isinstance(data, dict) else data
-        if not isinstance(docs, list):
-            return []
-        return docs
+        return docs if isinstance(docs, list) else []
     except Exception as e:
         st.error(f"프록시 호출 오류: {e}")
         return []
+
 
 def aladin_cover_from_isbn(isbn: str):
     """간단 커버 URL 추정(성공 보장 X) - 없으면 빈 문자열"""
@@ -171,11 +169,19 @@ if submitted:
             for d in nlk_docs:
                 with st.container(border=True):
                     title = d.get("TITLE", "제목 없음")
-                    link = d.get("DETAIL_LINK") or ""
-                    if link:
-                        st.markdown(f"**[{title}]({link})**")
-                    else:
-                        st.markdown(f"**{title}**")
+                    # 🔴 여기! DETAIL_LINK 우선 사용
+                    link = d.get("DETAIL_LINK")
+                    if not link:  # 혹시 Worker가 못 넣어줬을 때만 최후 fallback
+                        isbn = (d.get("ISBN") or "").strip()
+                        cn = (d.get("CN") or d.get("CONTROL_NO") or d.get("CONTROLNO") or "")
+                        if isbn:
+                            link = f"https://www.nl.go.kr/search/SearchDetail.do?isbn={quote_plus(isbn)}"
+                        elif cn:
+                            link = f"https://www.nl.go.kr/search/SearchDetail.do?cn={quote_plus(str(cn))}"
+                        else:
+                            link = f"https://www.nl.go.kr/search/searchResult.jsp?category=total&kwd={quote_plus(title)}"
+
+                    st.markdown(f"**[{title}]({link})**")
                     st.caption(
                         f"저자: {d.get('AUTHOR','정보 없음')} · "
                         f"출판사: {d.get('PUBLISHER','정보 없음')} · "
@@ -189,6 +195,4 @@ if submitted:
                             st.image(cover, use_container_width=True)
         else:
             st.info("검색 결과가 없습니다.")
-else:
-    # 첫 화면 도움말
-    st.info("상단 입력창에 검색어를 입력하고 **검색** 버튼을 눌러주세요.")
+
