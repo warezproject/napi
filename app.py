@@ -46,43 +46,41 @@ def search_jndi(records, keyword: str):
                     break
     return matched
 
-def call_nlk_api_simple(keyword: str):
-    """
-    이전에 성공했던 방식 그대로: 단순 GET + r.json()
-    - raise_for_status 사용 안 함
-    - User-Agent 헤더만 추가
-    """
+def call_nlk_api(keyword: str):
     if not keyword:
         return []
+
+    proxy_base = st.secrets.get("NLK_PROXY_BASE", "").rstrip("/")
+    if proxy_base:
+        try:
+            r = requests.get(f"{proxy_base}/", params={
+                "title": keyword, "page_no": 1, "page_size": 10
+            }, timeout=10)
+            data = r.json()
+            docs = data.get("docs", []) if isinstance(data, dict) else data
+            if isinstance(docs, list):
+                return docs
+        except Exception as e:
+            st.info(f"프록시 실패: {e}")
+
+    # (폴백) 직접 호출 — Cloud에선 여전히 타임아웃 가능
     try:
         cert_key = st.secrets["NLK_CERT_KEY"]
     except KeyError:
-        st.error("Secrets에 NLK_CERT_KEY가 없습니다. Streamlit Cloud 앱 Settings → Secrets에 NLK_CERT_KEY를 추가하세요.")
+        st.error("Secrets에 NLK_CERT_KEY 없음")
         return []
-
     url = "https://www.nl.go.kr/seoji/SearchApi.do"
-    params = {
-        "cert_key": cert_key,
-        "result_style": "json",
-        "page_no": 1,
-        "page_size": 10,
-        "title": keyword or ""
-    }
+    params = {"cert_key": cert_key, "result_style": "json",
+              "page_no": 1, "page_size": 10, "title": keyword}
     headers = {"User-Agent": "Mozilla/5.0 (Streamlit App)"}
-
     try:
-        # '예전에 문제 없던' 스타일 유지: timeout=10, raise_for_status() 호출 안 함
         r = requests.get(url, params=params, headers=headers, timeout=10)
-        try:
-            data = r.json()
-        except Exception:
-            return []
+        data = r.json()
         return data.get("docs", []) or []
     except Exception as e:
-        # 네트워크 타임아웃/연결 문제는 여기로 들어옴
-        st.warning(f"국립중앙도서관 API 호출 오류: {e}")
+        st.warning(f"NLK 직접 호출 오류: {e}")
         return []
-
+    
 def aladin_cover_from_isbn(isbn: str):
     """간단 커버 URL 추정(성공 보장 X) - 없으면 빈 문자열"""
     if not isbn:
@@ -103,7 +101,7 @@ if submitted:
     jndi_hits = search_jndi(jndi_all, kw)
 
     # NLK API 검색 (단순 호출 버전)
-    nlk_docs = call_nlk_api_simple(kw)
+    nlk_docs = call_nlk_api(kw)
 
     # -----------------------------
     # 결과 표시
