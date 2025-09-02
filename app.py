@@ -241,17 +241,17 @@ def _enrich_links_with_isbn(records: list, api_key: str) -> list:
         out.append(rec)
     return out
 
-def call_nlk_api(keyword: str):
+def call_nlk_api(keyword: str, page_num: int = 1, page_size: int = 10):
     """
     국립중앙도서관 OpenAPI (XML) 호출 → <detail_link> 포함된 결과 반환
     """
     if not keyword:
-        return []
+        return [], 0
 
     api_key = st.secrets.get("NLK_OPENAPI_KEY") or st.secrets.get("NLK_CERT_KEY")
     if not api_key:
         st.error("Secrets에 NLK_OPENAPI_KEY (또는 NLK_CERT_KEY)가 없습니다.")
-        return []
+        return [], 0
 
     url = "https://www.nl.go.kr/NL/search/openApi/search.do"
     params = {
@@ -259,8 +259,8 @@ def call_nlk_api(keyword: str):
         "apiType": "xml",
         "srchTarget": "total",
         "kwd": keyword,
-        "pageNum": 1,
-        "pageSize": 10,
+        "pageNum": page_num,
+        "pageSize": page_size,
         "sort": "",
         "category": "도서"
     }
@@ -271,6 +271,11 @@ def call_nlk_api(keyword: str):
         r.raise_for_status()
 
         root = ET.fromstring(r.text)
+
+        # 전체 건수
+        total_str = root.findtext(".//paramData/total") or "0"
+        total = int(total_str) if total_str.isdigit() else 0
+
         docs = []
         for item in root.findall(".//result/item"):
             title = (item.findtext("title_info") or "").strip() or "제목 없음"
@@ -290,11 +295,12 @@ def call_nlk_api(keyword: str):
                 "ISBN": isbn,
                 "DETAIL_LINK": detail_link
             })
-        return docs
+        return docs, total
 
     except Exception as e:
         st.warning(f"NLK OpenAPI 호출 오류: {e}")
-        return []
+        return [], 0
+
 
 # -----------------------------
 # 알라딘 커버 (옵션)
@@ -313,18 +319,36 @@ jndi_all, jndi_meta = load_jndi_json_best_effort()
 # 검색 실행
 # -----------------------------
 if submitted:
+    # ----- 전남연구원 -----
     jndi_hits = search_jndi(jndi_all, kw)
-    nlk_docs = call_nlk_api(kw)
 
+    # 페이지네이션 (로컬 데이터)
+    page_size = 10
+    jndi_total = len(jndi_hits)
+    jndi_total_pages = (jndi_total + page_size - 1) // page_size
+    jndi_page = st.number_input("전남연구원 페이지", 1, max(1, jndi_total_pages), 1, key="jndi_page")
+
+    start = (jndi_page - 1) * page_size
+    end = start + page_size
+    jndi_page_data = jndi_hits[start:end]
+
+    # ----- 국립중앙도서관 -----
+    nlk_page = st.number_input("국립중앙도서관 페이지", 1, 9999, 1, key="nlk_page")
+    nlk_docs, nlk_total = call_nlk_api(kw, page_num=nlk_page, page_size=10)
+    nlk_total_pages = (nlk_total + page_size - 1) // page_size
+
+    # -----------------------------
+    # 결과 표시
+    # -----------------------------
     st.write("---")
     cols = st.columns([1, 1])
 
     # 전남연구원
     with cols[0]:
         st.subheader("전남연구원 검색 결과")
-        st.caption(f"로컬 데이터: 존재={jndi_meta['exists']} · 경로={jndi_meta.get('path')} · 총 {jndi_meta['count']}건")
-        if jndi_hits:
-            for b in jndi_hits:
+        st.caption(f"총 {jndi_total}건 / 현재 페이지 {jndi_page}/{jndi_total_pages}")
+        if jndi_page_data:
+            for b in jndi_page_data:
                 with st.container(border=True):
                     title = b.get('서명') or b.get('서명 ') or b.get('Title') or b.get('제목') or ''
                     st.markdown(f"**{title}**")
@@ -333,15 +357,13 @@ if submitted:
                         f"발행자: {b.get('발행자','정보 없음')} · "
                         f"발행년도: {b.get('발행년도','정보 없음')}"
                     )
-                    regno = b.get("등록번호", "")
-                    if regno:
-                        st.code(f"등록번호: {regno}", language="text")
         else:
             st.info("검색 결과가 없습니다.")
 
     # 국립중앙도서관
     with cols[1]:
         st.subheader("국립중앙도서관 검색 결과")
+        st.caption(f"총 {nlk_total}건 / 현재 페이지 {nlk_page}/{nlk_total_pages}")
         if nlk_docs:
             for d in nlk_docs:
                 with st.container(border=True):
@@ -356,17 +378,5 @@ if submitted:
                         f"출판사: {d.get('PUBLISHER','정보 없음')} · "
                         f"발행년도: {d.get('PUBLISH_YEAR','정보 없음')}"
                     )
-                    isbn = (d.get("ISBN") or "").strip()
-                    if isbn:
-                        st.code(f"ISBN: {isbn}", language="text")
-                        cover = aladin_cover_from_isbn(isbn)
-                        if cover:
-                            st.image(cover, use_container_width=True)
-
-    # (디버그가 필요하면 아래 주석 해제해서 구조 확인)
-    # with st.expander("NLK 첫 건 raw JSON"):
-    #     if nlk_docs:
-    #         st.json(nlk_docs[0]["_raw"])
-
-else:
-    st.info("상단 입력창에 검색어를 입력하고 **검색** 버튼을 눌러주세요.")
+        else:
+            st.info("검색 결과가 없습니다.")
