@@ -6,21 +6,6 @@ import xml.etree.ElementTree as ET
 import requests
 import streamlit as st
 
-# 페이지네이션 간격 좁히기 (한 번만 선언)
-st.markdown("""
-<style>
-/* 전남연구원 */
-div[data-testid="jndi_pager"] .stRadio > div { gap: 4px !important; }
-div[data-testid="jndi_pager"] label { padding: 2px 6px !important; border: 1px solid #ddd; border-radius: 6px; }
-div[data-testid="jndi_pager"] input:checked + div { font-weight: 700; }
-
-/* 국립중앙도서관 */
-div[data-testid="nlk_pager"] .stRadio > div { gap: 4px !important; }
-div[data-testid="nlk_pager"] label { padding: 2px 6px !important; border: 1px solid #ddd; border-radius: 6px; }
-div[data-testid="nlk_pager"] input:checked + div { font-weight: 700; }
-</style>
-""", unsafe_allow_html=True)
-
 # -----------------------------
 # 기본 설정
 # -----------------------------
@@ -28,6 +13,22 @@ st.set_page_config(page_title="국가정보정책협의회 TEST", layout="wide")
 st.title("국가정보정책협의회 TEST")
 st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 Open API")
 
+# 페이지네이션 간격 좁히기 (한 번만 선언)
+st.markdown("""
+<style>
+div[data-testid="jndi_pager"]  .stRadio > div,
+div[data-testid="nlk_pager"]   .stRadio > div,
+div[data-testid="aladin_pager"] .stRadio > div { gap: 4px !important; }
+
+div[data-testid="jndi_pager"]  label,
+div[data-testid="nlk_pager"]   label,
+div[data-testid="aladin_pager"] label { padding: 2px 6px !important; border: 1px solid #ddd; border-radius: 6px; }
+
+div[data-testid="jndi_pager"]  input:checked + div,
+div[data-testid="nlk_pager"]   input:checked + div,
+div[data-testid="aladin_pager"] input:checked + div { font-weight: 700; }
+</style>
+""", unsafe_allow_html=True)
 
 # -----------------------------
 # 세션 상태 초기화
@@ -38,6 +39,9 @@ if "jndi_page" not in st.session_state:
     st.session_state.jndi_page = 1
 if "nlk_page" not in st.session_state:
     st.session_state.nlk_page = 1
+if "aladin_page" not in st.session_state:
+    st.session_state.aladin_page = 1
+
 
 # -----------------------------
 # 입력 UI
@@ -182,48 +186,6 @@ def _extract_detail_link(rec: dict) -> str:
         return f"https://www.nl.go.kr/search/searchResult.jsp?category=total&kwd={quote_plus(title)}"
     return "https://www.nl.go.kr"
 
-def _normalize_nlk_record(rec: dict) -> dict:
-    title = _get_first(rec, ("title_info", "TITLE", "title")) or "제목 없음"
-    author = _get_first(rec, ("author_info", "AUTHOR", "author")) or "정보 없음"
-    publisher = _get_first(rec, ("pub_info", "PUBLISHER", "publisher")) or "정보 없음"
-    pub_year = _get_first(rec, ("pub_year_info", "PUBLISH_YEAR", "year")) or "정보 없음"
-    isbn = _extract_isbn(rec)
-    link = _extract_detail_link(rec)
-    control_no = _extract_cn(rec)
-    return {
-        "TITLE": title,
-        "AUTHOR": author,
-        "PUBLISHER": publisher,
-        "PUBLISH_YEAR": pub_year,
-        "ISBN": isbn,
-        "DETAIL_LINK": link,
-        "CONTROL_NO": control_no,
-        "_raw": rec,
-    }
-
-def _extract_list_from_any(data):
-    if isinstance(data, list):
-        return data
-    if not isinstance(data, dict):
-        return []
-    for k in ("docs", "result", "items", "list", "seoji", "data"):
-        v = data.get(k)
-        if isinstance(v, list):
-            return v
-        if isinstance(v, dict):
-            for kk in ("docs", "items", "list", "data"):
-                vv = v.get(kk)
-                if isinstance(vv, list):
-                    return vv
-    for v in data.values():
-        if isinstance(v, list):
-            return v
-        if isinstance(v, dict):
-            for vv in v.values():
-                if isinstance(vv, list):
-                    return vv
-    return []
-
 # -----------------------------
 # (중요) ISBN으로 2차 XML 조회하여 detail_link 보강
 # -----------------------------
@@ -286,6 +248,82 @@ def _enrich_links_with_isbn(records: list, api_key: str) -> list:
         out.append(rec)
     return out
 
+# -----------------------------
+# 알라딘 API 호출
+# -----------------------------
+def call_aladin_api(keyword: str, page_num: int = 1, page_size: int = 10):
+    """
+    알라딘 상품 검색 API (ItemSearch)
+    - XML로 받아 파싱
+    - page_num은 1부터 시작
+    반환: (docs, totalResults)
+    """
+    if not keyword:
+        return [], 0
+
+    ttbkey = st.secrets.get("ALADIN_TTB_KEY")
+    if not ttbkey:
+        st.error("Secrets에 ALADIN_TTB_KEY가 없습니다.")
+        return [], 0
+
+    url = "http://www.aladin.co.kr/ttb/api/ItemSearch.aspx"
+    params = {
+        "ttbkey": ttbkey,
+        "Query": keyword,
+        "QueryType": "Keyword",     # 제목+저자
+        "MaxResults": page_size,    # 페이지 당 개수(최대 50)
+        "start": page_num,          # 1-based page
+        "SearchTarget": "Book",     # 도서
+        "output": "xml",            # XML 파싱 안전
+        "Version": "20131101",
+        "Cover": "MidBig",          # 표지 크기(선택)
+        "includeKey": 0
+    }
+    headers = {"User-Agent": "Mozilla/5.0 (Streamlit Aladin Client)"}
+
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=12)
+        r.raise_for_status()
+        root = ET.fromstring(r.text)
+
+        # totalResults / itemsPerPage / startIndex 등 상단 메타
+        total_str = root.findtext(".//totalResults") or "0"
+        try:
+            total = int(total_str)
+        except:
+            total = 0
+
+        docs = []
+        for item in root.findall(".//item"):
+            title  = (item.findtext("title") or "").strip() or "제목 없음"
+            link   = (item.findtext("link") or "").strip()
+            author = (item.findtext("author") or "").strip() or "정보 없음"
+            pub    = (item.findtext("publisher") or "").strip() or "정보 없음"
+            date   = (item.findtext("pubDate") or "").strip()
+            isbn13 = (item.findtext("isbn13") or "").strip()
+            cover  = (item.findtext("cover") or "").strip()
+            rank   = (item.findtext("customerReviewRank") or "").strip()
+
+            docs.append({
+                "TITLE": title,
+                "LINK": link,
+                "AUTHOR": author,
+                "PUBLISHER": pub,
+                "PUBDATE": date,
+                "ISBN13": isbn13,
+                "COVER": cover,
+                "RATING": rank,
+            })
+
+        return docs, total
+
+    except Exception as e:
+        st.warning(f"알라딘 API 호출 오류: {e}")
+        return [], 0
+
+# -----------------------------
+# 국립중앙도서관 API 호출
+# -----------------------------
 def call_nlk_api(keyword: str, page_num: int = 1, page_size: int = 10):
     """
     국립중앙도서관 OpenAPI (XML) 호출 → <detail_link> 포함된 결과 반환
@@ -361,48 +399,47 @@ def aladin_cover_from_isbn(isbn: str):
 jndi_all, jndi_meta = load_jndi_json_best_effort()
 
 # -----------------------------
-# 검색 실행
-# -----------------------------
-# -----------------------------
-# 검색 실행 (submitted에 의존하지 않음)
+# 검색 실행 (세션의 query 기준준)
 # -----------------------------
 PAGE_SIZE = 10
 active_kw = st.session_state.query  # 세션의 검색어로 항상 렌더링
 
-# ===== 전남연구원 =====
+# ===== 데이터 준비 =====
+# 전남연구원
 jndi_all, jndi_meta = load_jndi_json_best_effort()
 jndi_hits = search_jndi(jndi_all, active_kw)
 jndi_total = len(jndi_hits)
 jndi_total_pages = max(1, (jndi_total + PAGE_SIZE - 1) // PAGE_SIZE)
-
-# 세션의 현재 페이지 → 로컬 변수로 복사
 jndi_page = st.session_state.jndi_page
-nlk_page  = st.session_state.nlk_page
-
-# 현재 페이지 슬라이스 (전남연구원)
 j_start = (jndi_page - 1) * PAGE_SIZE
 j_end   = j_start + PAGE_SIZE
 jndi_page_data = jndi_hits[j_start:j_end]
 
-# ===== 국립중앙도서관 =====
+# 국립중앙도서관
+nlk_page = st.session_state.nlk_page
 nlk_docs, nlk_total = call_nlk_api(active_kw, page_num=nlk_page, page_size=PAGE_SIZE)
 nlk_total_pages = max(1, (nlk_total + PAGE_SIZE - 1) // PAGE_SIZE)
 
+# 알라딘
+ALADIN_PAGE_SIZE = 10
+aladin_page = st.session_state.aladin_page
+aladin_docs, aladin_total = call_aladin_api(active_kw, page_num=aladin_page, page_size=ALADIN_PAGE_SIZE)
+aladin_total_pages = max(1, (aladin_total + ALADIN_PAGE_SIZE - 1) // ALADIN_PAGE_SIZE)
+
 # -----------------------------
-# 결과 표시
+# 3열 레이아웃 (왼/JNDI · 중/NLK · 오/알라딘)
 # -----------------------------
 st.write("---")
-layout_cols = st.columns([1, 1])  # 좌/우 레이아웃는 별도 변수 이름 사용
+col_left, col_center, col_right = st.columns([1, 1, 1])
 
-# 전남연구원
-with layout_cols[0]:
-    st.subheader("전남연구원 검색 결과")
-    st.caption(f"총 {jndi_total}건 / 현재 페이지 {jndi_page}/{jndi_total_pages}")
-
+# ===== 왼쪽: 전남연구원 =====
+with col_left:
+    st.subheader("전남연구원")
+    st.caption(f"총 {jndi_total}건 · {jndi_page}/{jndi_total_pages}페이지")
     if jndi_page_data:
         for b in jndi_page_data:
             with st.container(border=True):
-                title = b.get('서명') or b.get('서명 ') or b.get('Title') or b.get('제목') or ''
+                title = b.get('서명') or b.get('서명 ') or b.get('서명(국문)') or b.get('Title') or b.get('제목') or ''
                 st.markdown(f"**{title}**")
                 st.caption(
                     f"저자: {b.get('저자','정보 없음')} · "
@@ -412,42 +449,30 @@ with layout_cols[0]:
     else:
         st.info("검색 결과가 없습니다.")
 
-    # --- 전남연구원 페이지네이션 (결과 리스트 아래) ---
+    # 하단 페이지네이션 (가로, 촘촘)
     if jndi_total_pages > 1:
         start_page = max(1, jndi_page - 2)
         end_page   = min(jndi_total_pages, jndi_page + 2)
-        page_opts  = list(range(start_page, end_page + 1))
-        # 컨테이너에 data-testid 달아 CSS 타깃팅
-        with st.container():
-            st.markdown('<div data-testid="jndi_pager">', unsafe_allow_html=True)
-            sel = st.radio(
-                "전남 페이지", page_opts,
-                index=page_opts.index(jndi_page),
-                horizontal=True,
-                label_visibility="collapsed",
-                key=f"jndi_radio_{active_kw}",  # 검색어마다 상태 분리(선택)
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
+        opts       = list(range(start_page, end_page + 1))
+        st.markdown('<div data-testid="jndi_pager">', unsafe_allow_html=True)
+        sel = st.radio("JNDI 페이지", opts, index=opts.index(jndi_page),
+                       horizontal=True, label_visibility="collapsed",
+                       key=f"jndi_radio_{active_kw}")
+        st.markdown('</div>', unsafe_allow_html=True)
         if sel != jndi_page:
             st.session_state.jndi_page = int(sel)
             st.rerun()
 
-
-
-# 국립중앙도서관
-with layout_cols[1]:
-    st.subheader("국립중앙도서관 검색 결과")
-    st.caption(f"총 {nlk_total}건 / 현재 페이지 {nlk_page}/{nlk_total_pages}")
-
+# ===== 가운데: 국립중앙도서관 =====
+with col_center:
+    st.subheader("국립중앙도서관")
+    st.caption(f"총 {nlk_total}건 · {nlk_page}/{nlk_total_pages}페이지")
     if nlk_docs:
         for d in nlk_docs:
             with st.container(border=True):
                 title = d.get("TITLE", "제목 없음")
                 link  = d.get("DETAIL_LINK") or ""
-                if link:
-                    st.markdown(f"**[{title}]({link})**")
-                else:
-                    st.markdown(f"**{title}**")
+                st.markdown(f"**[{title}]({link})**" if link else f"**{title}**")
                 st.caption(
                     f"저자: {d.get('AUTHOR','정보 없음')} · "
                     f"출판사: {d.get('PUBLISHER','정보 없음')} · "
@@ -456,21 +481,49 @@ with layout_cols[1]:
     else:
         st.info("검색 결과가 없습니다.")
 
-    # --- 국립중앙도서관 페이지네이션 (결과 리스트 아래) ---
     if nlk_total_pages > 1:
         start_page = max(1, nlk_page - 2)
         end_page   = min(nlk_total_pages, nlk_page + 2)
-        page_opts  = list(range(start_page, end_page + 1))
-        with st.container():
-            st.markdown('<div data-testid="nlk_pager">', unsafe_allow_html=True)
-            sel = st.radio(
-                "NLK 페이지", page_opts,
-                index=page_opts.index(nlk_page),
-                horizontal=True,
-                label_visibility="collapsed",
-                key=f"nlk_radio_{active_kw}",
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
+        opts       = list(range(start_page, end_page + 1))
+        st.markdown('<div data-testid="nlk_pager">', unsafe_allow_html=True)
+        sel = st.radio("NLK 페이지", opts, index=opts.index(nlk_page),
+                       horizontal=True, label_visibility="collapsed",
+                       key=f"nlk_radio_{active_kw}")
+        st.markdown('</div>', unsafe_allow_html=True)
         if sel != nlk_page:
             st.session_state.nlk_page = int(sel)
+            st.rerun()
+
+# ===== 오른쪽: 알라딘 =====
+with col_right:
+    st.subheader("알라딘")
+    st.caption(f"총 {aladin_total}건 · {aladin_page}/{aladin_total_pages}페이지")
+    if aladin_docs:
+        for d in aladin_docs:
+            with st.container(border=True):
+                title = d.get("TITLE", "제목 없음")
+                link  = d.get("LINK", "")
+                st.markdown(f"**[{title}]({link})**" if link else f"**{title}**")
+                st.caption(
+                    f"저자: {d.get('AUTHOR','정보 없음')} · "
+                    f"출판사: {d.get('PUBLISHER','정보 없음')} · "
+                    f"출간일: {d.get('PUBDATE','정보 없음')}"
+                )
+                cover = d.get("COVER", "")
+                if cover:
+                    st.image(cover, use_container_width=True)
+    else:
+        st.info("검색 결과가 없습니다.")
+
+    if aladin_total_pages > 1:
+        start_page = max(1, aladin_page - 2)
+        end_page   = min(aladin_total_pages, aladin_page + 2)
+        opts       = list(range(start_page, end_page + 1))
+        st.markdown('<div data-testid="aladin_pager">', unsafe_allow_html=True)
+        sel = st.radio("ALADIN 페이지", opts, index=opts.index(aladin_page),
+                       horizontal=True, label_visibility="collapsed",
+                       key=f"aladin_radio_{active_kw}")
+        st.markdown('</div>', unsafe_allow_html=True)
+        if sel != aladin_page:
+            st.session_state.aladin_page = int(sel)
             st.rerun()
