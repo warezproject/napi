@@ -324,65 +324,130 @@ def call_aladin_api(keyword: str, page_num: int = 1, page_size: int = 10):
 # -----------------------------
 # 국립중앙도서관 API 호출
 # -----------------------------
-def call_nlk_api(keyword: str, page_num: int = 1, page_size: int = 10):
+import xml.etree.ElementTree as ET
+import re
+
+def call_aladin_api(keyword: str, page_num: int = 1, page_size: int = 10, query_type: str = "Keyword"):
     """
-    국립중앙도서관 OpenAPI (XML) 호출 → <detail_link> 포함된 결과 반환
+    알라딘 상품 검색 API (ItemSearch)
+    - XML 기본 네임스페이스(xmlns)를 안전하게 처리
+    - page_num: 1-based (알라딘 API 'start'와 동일)
+    - query_type: "Keyword" | "Title" | "Author" ...
+    반환: (docs, totalResults)
     """
     if not keyword:
         return [], 0
 
-    api_key = st.secrets.get("NLK_OPENAPI_KEY") or st.secrets.get("NLK_CERT_KEY")
-    if not api_key:
-        st.error("Secrets에 NLK_OPENAPI_KEY (또는 NLK_CERT_KEY)가 없습니다.")
+    ttbkey = st.secrets.get("ALADIN_TTB_KEY")
+    if not ttbkey:
+        st.error("Secrets에 ALADIN_TTB_KEY가 없습니다.")
         return [], 0
 
-    url = "https://www.nl.go.kr/NL/search/openApi/search.do"
+    # 알라딘은 공식 가이드상 http 엔드포인트 표기.
+    # 일부 환경에서 http가 막히면 프록시를 고려하세요.
+    url = "http://www.aladin.co.kr/ttb/api/ItemSearch.aspx"
     params = {
-        "key": api_key,
-        "apiType": "xml",
-        "srchTarget": "total",
-        "kwd": keyword,
-        "pageNum": page_num,
-        "pageSize": page_size,
-        "sort": "",
-        "category": "도서"
+        "ttbkey": ttbkey,
+        "Query": keyword,
+        "QueryType": query_type,     # 예: "Title" (요청하신 예시), 기본은 "Keyword"
+        "MaxResults": page_size,     # 1~50
+        "start": page_num,           # 1-based
+        "SearchTarget": "Book",
+        "output": "xml",
+        "Version": "20131101",
+        "Cover": "MidBig",
     }
-    headers = {"User-Agent": "Mozilla/5.0 (Streamlit XML Client)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Streamlit Aladin Client)"}
 
     try:
         r = requests.get(url, params=params, headers=headers, timeout=12)
         r.raise_for_status()
+        text = r.text
 
-        root = ET.fromstring(r.text)
+        # --- 1) 네임스페이스-aware 파싱 시도 ---
+        root = ET.fromstring(text)
 
-        # 전체 건수
-        total_str = root.findtext(".//paramData/total") or "0"
-        total = int(total_str) if total_str.isdigit() else 0
+        # 루트 네임스페이스 추출 (예: {http://www.aladin.co.kr/ttb/apiguide.aspx})
+        m = re.match(r'^\{(.*)\}', root.tag)
+        ns_uri = m.group(1) if m else None
+        ns = {"a": ns_uri} if ns_uri else None
+
+        def _find(path):
+            if ns:
+                return root.find(path, ns)
+            return root.find(path)
+
+        def _findall(path):
+            if ns:
+                return root.findall(path, ns)
+            return root.findall(path)
+
+        # totalResults
+        total_node = _find(".//a:totalResults" if ns else ".//totalResults")
+        total_str = total_node.text.strip() if (total_node is not None and total_node.text) else "0"
+        try:
+            total = int(total_str)
+        except:
+            total = 0
+
+        # item 노드들
+        items = _findall(".//a:item" if ns else ".//item")
+
+        # --- 2) 네임스페이스로도 못 찾으면(예외 케이스), 폴백: 네임스페이스 제거 후 재파싱 ---
+        if not items:
+            no_ns_text = re.sub(r'\sxmlns="[^"]+"', "", text, count=1)  # 기본 xmlns 제거
+            root2 = ET.fromstring(no_ns_text)
+            total_str = (root2.findtext(".//totalResults") or "0").strip()
+            try:
+                total = int(total_str)
+            except:
+                total = 0
+            items = root2.findall(".//item")
+            # 이때부터는 root2에서 직접 텍스트를 꺼내자
+            def _txt2(elem, tag):
+                t = elem.findtext(tag)
+                return (t or "").strip()
+            docs = []
+            for it in items:
+                docs.append({
+                    "TITLE":   _txt2(it, "title") or "제목 없음",
+                    "LINK":    _txt2(it, "link"),
+                    "AUTHOR":  _txt2(it, "author") or "정보 없음",
+                    "PUBLISHER": _txt2(it, "publisher") or "정보 없음",
+                    "PUBDATE": _txt2(it, "pubDate"),
+                    "ISBN13":  _txt2(it, "isbn13"),
+                    "COVER":   _txt2(it, "cover"),
+                    "RATING":  _txt2(it, "customerReviewRank"),
+                })
+            return docs, total
+
+        # --- 3) 정상(네임스페이스-aware) 경로 ---
+        def _txt(elem, tag):
+            if ns:
+                t = elem.findtext(f"a:{tag}", namespaces=ns)
+            else:
+                t = elem.findtext(tag)
+            return (t or "").strip()
 
         docs = []
-        for item in root.findall(".//result/item"):
-            title = (item.findtext("title_info") or "").strip() or "제목 없음"
-            author = (item.findtext("author_info") or "").strip() or "정보 없음"
-            publisher = (item.findtext("pub_info") or "").strip() or "정보 없음"
-            year = (item.findtext("pub_year_info") or "").strip() or "정보 없음"
-            isbn = (item.findtext("isbn") or "").strip()
-            detail_link = (item.findtext("detail_link") or "").strip()
-            if detail_link.startswith("/"):
-                detail_link = f"https://www.nl.go.kr{detail_link}"
-
+        for it in items:
             docs.append({
-                "TITLE": title,
-                "AUTHOR": author,
-                "PUBLISHER": publisher,
-                "PUBLISH_YEAR": year,
-                "ISBN": isbn,
-                "DETAIL_LINK": detail_link
+                "TITLE":    _txt(it, "title") or "제목 없음",
+                "LINK":     _txt(it, "link"),
+                "AUTHOR":   _txt(it, "author") or "정보 없음",
+                "PUBLISHER":_txt(it, "publisher") or "정보 없음",
+                "PUBDATE":  _txt(it, "pubDate"),
+                "ISBN13":   _txt(it, "isbn13"),
+                "COVER":    _txt(it, "cover"),
+                "RATING":   _txt(it, "customerReviewRank"),
             })
+
         return docs, total
 
     except Exception as e:
-        st.warning(f"NLK OpenAPI 호출 오류: {e}")
+        st.warning(f"알라딘 API 호출/파싱 오류: {e}")
         return [], 0
+
 
 
 # -----------------------------
