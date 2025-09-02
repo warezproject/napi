@@ -320,6 +320,7 @@ jndi_all, jndi_meta = load_jndi_json_best_effort()
 # -----------------------------
 if submitted:
     # ----- 전남연구원 -----
+    jndi_hits = search_jndi(jndi_all, kw)
     page_size = 10
     jndi_total = len(jndi_hits)
     jndi_total_pages = (jndi_total + page_size - 1) // page_size
