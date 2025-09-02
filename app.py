@@ -93,8 +93,7 @@ def aladin_cover_from_isbn(isbn: str):
 # -----------------------------
 # 데이터 로드 (실제 파일명에 맞춤)
 # -----------------------------
-# 주의: static/전남연구원.json → static/전남연구원_자료.json 로 수정
-jndi_all, jndi_meta = load_jndi_json(Path("static/전남연구원_자료.json"))
+jndi_all, jndi_meta = load_jndi_json(Path("static/전남연구원.json"))
 
 # -----------------------------
 # 검색 실행
