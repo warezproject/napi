@@ -1,3 +1,11 @@
+import json
+from pathlib import Path
+from urllib.parse import quote_plus
+import re
+import xml.etree.ElementTree as ET
+import requests
+import streamlit as st
+
 # 페이지네이션 간격 좁히기 (한 번만 선언)
 st.markdown("""
 <style>
@@ -12,15 +20,6 @@ div[data-testid="nlk_pager"] label { padding: 2px 6px !important; border: 1px so
 div[data-testid="nlk_pager"] input:checked + div { font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
-
-import json
-from pathlib import Path
-from urllib.parse import quote_plus
-import re
-import xml.etree.ElementTree as ET
-import requests
-import streamlit as st
-
 
 # -----------------------------
 # 기본 설정
