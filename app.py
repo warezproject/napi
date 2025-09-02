@@ -251,81 +251,7 @@ def _enrich_links_with_isbn(records: list, api_key: str) -> list:
 # -----------------------------
 # 알라딘 API 호출
 # -----------------------------
-def call_aladin_api(keyword: str, page_num: int = 1, page_size: int = 10):
-    """
-    알라딘 상품 검색 API (ItemSearch)
-    - XML로 받아 파싱
-    - page_num은 1부터 시작
-    반환: (docs, totalResults)
-    """
-    if not keyword:
-        return [], 0
 
-    ttbkey = st.secrets.get("ALADIN_TTB_KEY")
-    if not ttbkey:
-        st.error("Secrets에 ALADIN_TTB_KEY가 없습니다.")
-        return [], 0
-
-    url = "http://www.aladin.co.kr/ttb/api/ItemSearch.aspx"
-    params = {
-        "ttbkey": ttbkey,
-        "Query": keyword,
-        "QueryType": "Keyword",     # 제목+저자
-        "MaxResults": page_size,    # 페이지 당 개수(최대 50)
-        "start": page_num,          # 1-based page
-        "SearchTarget": "Book",     # 도서
-        "output": "xml",            # XML 파싱 안전
-        "Version": "20131101",
-        "Cover": "MidBig",          # 표지 크기(선택)
-        "includeKey": 0
-    }
-    headers = {"User-Agent": "Mozilla/5.0 (Streamlit Aladin Client)"}
-
-    try:
-        r = requests.get(url, params=params, headers=headers, timeout=12)
-        r.raise_for_status()
-        root = ET.fromstring(r.text)
-
-        # totalResults / itemsPerPage / startIndex 등 상단 메타
-        total_str = root.findtext(".//totalResults") or "0"
-        try:
-            total = int(total_str)
-        except:
-            total = 0
-
-        docs = []
-        for item in root.findall(".//item"):
-            title  = (item.findtext("title") or "").strip() or "제목 없음"
-            link   = (item.findtext("link") or "").strip()
-            author = (item.findtext("author") or "").strip() or "정보 없음"
-            pub    = (item.findtext("publisher") or "").strip() or "정보 없음"
-            date   = (item.findtext("pubDate") or "").strip()
-            isbn13 = (item.findtext("isbn13") or "").strip()
-            cover  = (item.findtext("cover") or "").strip()
-            rank   = (item.findtext("customerReviewRank") or "").strip()
-
-            docs.append({
-                "TITLE": title,
-                "LINK": link,
-                "AUTHOR": author,
-                "PUBLISHER": pub,
-                "PUBDATE": date,
-                "ISBN13": isbn13,
-                "COVER": cover,
-                "RATING": rank,
-            })
-
-        return docs, total
-
-    except Exception as e:
-        st.warning(f"알라딘 API 호출 오류: {e}")
-        return [], 0
-
-# -----------------------------
-# 국립중앙도서관 API 호출
-# -----------------------------
-import xml.etree.ElementTree as ET
-import re
 
 def call_aladin_api(keyword: str, page_num: int = 1, page_size: int = 10, query_type: str = "Keyword"):
     """
@@ -448,6 +374,69 @@ def call_aladin_api(keyword: str, page_num: int = 1, page_size: int = 10, query_
         st.warning(f"알라딘 API 호출/파싱 오류: {e}")
         return [], 0
 
+
+# -----------------------------
+# 국립중앙도서관 API 호출
+# -----------------------------
+def call_nlk_api(keyword: str, page_num: int = 1, page_size: int = 10):
+    """
+    국립중앙도서관 OpenAPI (XML) 호출 → <detail_link> 포함된 결과 반환
+    """
+    if not keyword:
+        return [], 0
+
+    api_key = st.secrets.get("NLK_OPENAPI_KEY") or st.secrets.get("NLK_CERT_KEY")
+    if not api_key:
+        st.error("Secrets에 NLK_OPENAPI_KEY (또는 NLK_CERT_KEY)가 없습니다.")
+        return [], 0
+
+    url = "https://www.nl.go.kr/NL/search/openApi/search.do"
+    params = {
+        "key": api_key,
+        "apiType": "xml",
+        "srchTarget": "total",
+        "kwd": keyword,
+        "pageNum": page_num,
+        "pageSize": page_size,
+        "sort": "",
+        "category": "도서"
+    }
+    headers = {"User-Agent": "Mozilla/5.0 (Streamlit XML Client)"}
+
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=12)
+        r.raise_for_status()
+
+        root = ET.fromstring(r.text)
+
+        # 전체 건수
+        total_str = root.findtext(".//paramData/total") or "0"
+        total = int(total_str) if total_str.isdigit() else 0
+
+        docs = []
+        for item in root.findall(".//result/item"):
+            title = (item.findtext("title_info") or "").strip() or "제목 없음"
+            author = (item.findtext("author_info") or "").strip() or "정보 없음"
+            publisher = (item.findtext("pub_info") or "").strip() or "정보 없음"
+            year = (item.findtext("pub_year_info") or "").strip() or "정보 없음"
+            isbn = (item.findtext("isbn") or "").strip()
+            detail_link = (item.findtext("detail_link") or "").strip()
+            if detail_link.startswith("/"):
+                detail_link = f"https://www.nl.go.kr{detail_link}"
+
+            docs.append({
+                "TITLE": title,
+                "AUTHOR": author,
+                "PUBLISHER": publisher,
+                "PUBLISH_YEAR": year,
+                "ISBN": isbn,
+                "DETAIL_LINK": detail_link
+            })
+        return docs, total
+
+    except Exception as e:
+        st.warning(f"NLK OpenAPI 호출 오류: {e}")
+        return [], 0
 
 
 # -----------------------------
