@@ -1,199 +1,148 @@
 import json
-import re
 from pathlib import Path
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 
+# -----------------------------
+# 기본 설정
+# -----------------------------
 st.set_page_config(page_title="국가정보정책협의회 TEST", layout="wide")
 
-# 0) 쿼리스트링에서 검색어 읽기
-kw = st.query_params.get("kw", [""])[0].strip()
+st.title("국가정보정책협의회 TEST")
+st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 API 서버사이드 검색")
 
-# 1) 전남연구원 로컬 JSON 로드(존재/레코드 수 확인)
-jndi_json_path = Path("static/전남연구원.json")
-jndi_exists = jndi_json_path.exists()
-jndi_total = 0
-jndi_results = []
+# -----------------------------
+# 입력 UI
+# -----------------------------
+with st.form("search_form", clear_on_submit=False):
+    kw = st.text_input("도서 제목을 입력하세요", value="", placeholder="예: 딥러닝, 머신러닝, 인공지능 …")
+    submitted = st.form_submit_button("검색")
 
-if jndi_exists:
+# -----------------------------
+# 헬퍼 함수
+# -----------------------------
+@st.cache_data(show_spinner=False)
+def load_jndi_json(json_path: Path):
+    if not json_path.exists():
+        return [], {"exists": False, "count": 0}
     try:
-        jndi_all = json.loads(jndi_json_path.read_text(encoding="utf-8"))
-        jndi_total = len(jndi_all)
-        if kw:
-            low_kw = kw.casefold()
-            for rec in jndi_all:
-                # 열 이름이 '서명 '처럼 공백이 붙어 있는 경우 대비
-                # 후보 키들을 순회
-                for k in ("서명", "서명 ", " 제목", "Title", "title"):
-                    if k in rec and isinstance(rec[k], str):
-                        title = rec[k].casefold()
-                        if low_kw in title:
-                            jndi_results.append(rec)
-                            break
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        return data, {"exists": True, "count": len(data)}
     except Exception as e:
         st.warning(f"전남연구원 JSON 읽기 오류: {e}")
-else:
-    st.info("static/전남연구원.json 파일을 찾을 수 없습니다. 이름/경로를 확인해 주세요.")
+        return [], {"exists": True, "count": 0}
 
-# 2) NLK(API) 서버사이드 호출 (Secrets에 NLK_CERT_KEY 필요)
-nlk_docs = []
-if kw:
+def search_jndi(records, keyword: str):
+    if not keyword:
+        return []
+    key_candidates = ("서명", "서명 ", "Title", "title")
+    low_kw = keyword.casefold()
+    matched = []
+    for rec in records:
+        for k in key_candidates:
+            if k in rec and isinstance(rec[k], str):
+                if low_kw in rec[k].casefold():
+                    matched.append(rec)
+                    break
+    return matched
+
+def call_nlk_api(keyword: str):
+    """서버사이드에서 국립중앙도서관 API 호출 (키는 st.secrets에 보관)"""
+    if not keyword:
+        return []
     try:
-        CERT_KEY = st.secrets["NLK_CERT_KEY"]
-        url = "https://www.nl.go.kr/seoji/SearchApi.do"
-        params = {
-            "cert_key": CERT_KEY,
-            "result_style": "json",
-            "page_no": 1,
-            "page_size": 10,
-            "title": kw
-        }
+        cert_key = st.secrets["NLK_CERT_KEY"]
+    except KeyError:
+        st.error("Secrets에 NLK_CERT_KEY가 없습니다. Streamlit Cloud 앱 Settings → Secrets에 NLK_CERT_KEY를 추가하세요.")
+        return []
+
+    url = "https://www.nl.go.kr/seoji/SearchApi.do"
+    params = {
+        "cert_key": cert_key,
+        "result_style": "json",
+        "page_no": 1,
+        "page_size": 10,
+        "title": keyword
+    }
+    try:
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
-        nlk_docs = data.get("docs", []) or []
-    except KeyError:
-        st.error("Secrets에 NLK_CERT_KEY가 없습니다. Settings → Secrets에 NLK_CERT_KEY를 추가해 주세요.")
+        return data.get("docs", []) or []
     except Exception as e:
         st.warning(f"국립중앙도서관 API 호출 오류: {e}")
+        return []
 
-# 3) index.html 읽기
-html_path = Path("index.html")
-if not html_path.exists():
-    st.error("index.html 파일이 없습니다. 저장소 루트에 index.html을 두세요.")
-    st.stop()
+def aladin_cover_from_isbn(isbn: str):
+    """간단 커버 URL 추정(성공 보장 X) - 없으면 빈 문자열"""
+    if not isbn:
+        return ""
+    # 단순 추정 규칙(실패할 수 있음)
+    return f"https://image.aladin.co.kr/product/{isbn[-3:]}/{isbn[-5:]}cover.jpg"
 
-html = html_path.read_text(encoding="utf-8")
+# -----------------------------
+# 데이터 로드
+# -----------------------------
+jndi_all, jndi_meta = load_jndi_json(Path("static/전남연구원_자료.json"))
 
-# 3-1) 사용자가 섞어 썼을 수 있는 Tailwind CDN 마크다운 표기 교정
-html = html.replace("[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com/)", "https://cdn.tailwindcss.com")
-html = html.replace("[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)", "https://cdn.tailwindcss.com")
+# -----------------------------
+# 검색 실행
+# -----------------------------
+if submitted:
+    # 전남연구원 검색
+    jndi_hits = search_jndi(jndi_all, kw)
 
-# 3-2) 상대경로를 /app/static/ 절대경로로 자동 치환
-# - img/src, a/href, fetch(...) 등에서 '파일명.확장자'만 적은 경우 대응
-# - 이미 http(s):// 또는 / 로 시작하는 것은 유지
-def _to_static_abs(m):
-    url = m.group(1)
-    if url.startswith(("http://", "https://", "/", "data:")):
-        return m.group(0)  # 그대로
-    # 파일명 또는 하위폴더 상대경로 → /app/static/ 접두
-    return m.group(0).replace(url, f"/app/static/{url}")
+    # NLK API 검색
+    nlk_docs = call_nlk_api(kw)
 
-# img/src
-html = re.sub(r'src=["\']([^"\']+)["\']', _to_static_abs, html, flags=re.IGNORECASE)
-# a/href (외부 링크는 그대로)
-html = re.sub(r'href=["\']([^"\']+)["\']', lambda m: m.group(0) if m.group(1).startswith(("http://","https://","/")) else m.group(0).replace(m.group(1), f"/app/static/{m.group(1)}"), html, flags=re.IGNORECASE)
-# fetch('...') / fetch("...")
-html = re.sub(r'fetch\((["\'])([^"\']+)\1\)', lambda m: m.group(0) if m.group(2).startswith(("http://","https://","/")) else f'fetch("/app/static/{m.group(2)}")', html, flags=re.IGNORECASE)
+    # -----------------------------
+    # 결과 표시
+    # -----------------------------
+    st.write("---")
+    cols = st.columns([1, 1])
 
-# 4) 결과 주입 & searchBooks 오버라이드 스크립트(일반 문자열로!)
-inject = """
-<script>
-  // 서버에서 주입한 검색 상태/결과(키는 내려가지 않습니다)
-  window.__PRELOADED__ = {
-    keyword: %(KW)s,
-    jndi: %(JNDI)s,
-    nlk: %(NLK)s,
-    debug: {
-      jndi_file_exists: %(JEXISTS)s,
-      jndi_total_records: %(JTOTAL)s
-    }
-  };
+    # 전남연구원
+    with cols[0]:
+        st.subheader("전남연구원 검색 결과")
+        st.caption(f"로컬 데이터: 존재={jndi_meta['exists']} / 총 {jndi_meta['count']}건")
+        if jndi_hits:
+            for b in jndi_hits:
+                with st.container(border=True):
+                    st.markdown(f"**{b.get('서명') or b.get('서명 ') or b.get('Title') or ''}**")
+                    st.caption(
+                        f"저자: {b.get('저자','정보 없음')} · "
+                        f"발행자: {b.get('발행자','정보 없음')} · "
+                        f"발행년도: {b.get('발행년도','정보 없음')}"
+                    )
+                    regno = b.get("등록번호", "")
+                    if regno:
+                        st.code(f"등록번호: {regno}", language="text")
+        else:
+            st.info("검색 결과가 없습니다.")
 
-  // searchBooks 오버라이드: 쿼리스트링만 갱신 → 앱 재실행
-    // 안전한 버전(iframe 내부 주소만 갱신)
-    window.searchBooks = function () {
-    const input = document.getElementById('searchInput');
-    const nextKw = (input ? input.value : '').trim();
-
-    // iframe 자체 주소만 바꾸기
-    const url = new URL(window.location.href);
-    if (nextKw) url.searchParams.set('kw', nextKw);
-    else url.searchParams.delete('kw');
-    window.location.href = url.toString();  // parent 사용 금지
-    };
-
-
-  // 최초 렌더(주입 데이터로 그리기)
-  document.addEventListener('DOMContentLoaded', function() {
-    const preload = window.__PRELOADED__ || {};
-    const kw = preload.keyword || '';
-    const jndiContainer = document.getElementById('jndiResults');
-    const nlkContainer  = document.getElementById('nlkResults');
-    const input = document.getElementById('searchInput');
-    if (input && kw) input.value = kw;
-
-    if (jndiContainer) jndiContainer.innerHTML = '';
-    if (nlkContainer)  nlkContainer.innerHTML  = '';
-
-    // 전남연구원 카드
-    (preload.jndi || []).forEach(function(book){
-      const card = document.createElement('div');
-      card.className = 'bg-white shadow p-4 rounded border border-green-400';
-      const title = book['서명'] || book['서명 '] || book['Title'] || book['title'] || '';
-      const author = book['저자'] || '정보 없음';
-      const pub = book['발행자'] || '정보 없음';
-      const year = book['발행년도'] || '정보 없음';
-      const regno = book['등록번호'] || '';
-      card.innerHTML = `
-        <h3 class="text-lg font-bold mb-1">${title}</h3>
-        <p class="text-sm text-gray-700">저자: ${author}</p>
-        <p class="text-sm text-gray-700">발행자: ${pub}</p>
-        <p class="text-sm text-gray-700">발행년도: ${year}</p>
-        <p class="text-sm text-gray-500">등록번호: ${regno}</p>
-        <span class="inline-block mt-2 text-xs text-green-600 font-medium">출처: 전남연구원</span>
-      `;
-      jndiContainer && jndiContainer.appendChild(card);
-    });
-
-    // 국립중앙도서관 카드
-    const docs = preload.nlk || [];
-    if (docs.length === 0) {
-      if (kw && nlkContainer) {
-        nlkContainer.innerHTML = '<p class="text-center col-span-full text-gray-500">검색 결과가 없습니다.</p>';
-      }
-      return;
-    }
-    docs.forEach(function(book){
-      const isbn = book.ISBN || '';
-      const linkUrl = 'https://www.nl.go.kr/search/searchResult.jsp?category=total&kwd=' + encodeURIComponent(book.TITLE || '');
-      const imageUrl = isbn ? ('https://image.aladin.co.kr/product/' + isbn.slice(-3) + '/' + isbn.slice(-5) + 'cover.jpg') : '';
-      const card = document.createElement('a');
-      card.className = 'bg-white shadow p-4 rounded hover:ring-2 ring-blue-400 transition';
-      card.href = linkUrl;
-      card.target = '_blank';
-      card.innerHTML = `
-        ${imageUrl ? '<img src="' + imageUrl + '" alt="도서 표지" class="w-full h-48 object-contain mb-3"/>' : ''}
-        <h3 class="text-lg font-bold mb-1">${book.TITLE || '제목 없음'}</h3>
-        <p class="text-sm text-gray-700">저자: ${book.AUTHOR || '정보 없음'}</p>
-        <p class="text-sm text-gray-700">출판사: ${book.PUBLISHER || '정보 없음'}</p>
-        <p class="text-sm text-gray-700">발행년도: ${book.PUBLISH_YEAR || '정보 없음'}</p>
-        <p class="text-sm text-gray-500">ISBN: ${isbn}</p>
-      `;
-      nlkContainer && nlkContainer.appendChild(card);
-    });
-
-    // 간단 디버그(원하면 주석 해제)
-    // console.log('PRELOADED.debug =', preload.debug);
-  });
-</script>
-"""
-
-# 주입 데이터(JSON 직렬화) 삽입
-inject = inject % {
-    "KW": json.dumps(kw, ensure_ascii=False),
-    "JNDI": json.dumps(jndi_results, ensure_ascii=False),
-    "NLK": json.dumps(nlk_docs, ensure_ascii=False),
-    "JEXISTS": json.dumps(jndi_exists),
-    "JTOTAL": json.dumps(jndi_total),
-}
-
-# </body> 직전 삽입
-if "</body>" in html:
-    html = html.replace("</body>", inject + "\n</body>")
+    # 국립중앙도서관
+    with cols[1]:
+        st.subheader("국립중앙도서관 검색 결과")
+        if nlk_docs:
+            for d in nlk_docs:
+                with st.container(border=True):
+                    title = d.get("TITLE", "제목 없음")
+                    link = f"https://www.nl.go.kr/search/searchResult.jsp?category=total&kwd={requests.utils.quote(title)}"
+                    st.markdown(f"**[{title}]({link})**")
+                    st.caption(
+                        f"저자: {d.get('AUTHOR','정보 없음')} · "
+                        f"출판사: {d.get('PUBLISHER','정보 없음')} · "
+                        f"발행년도: {d.get('PUBLISH_YEAR','정보 없음')}"
+                    )
+                    isbn = d.get("ISBN", "")
+                    if isbn:
+                        st.code(f"ISBN: {isbn}", language="text")
+                        # 선택: 표지 이미지 표시(있으면 보임, 없으면 조용히 패스)
+                        cover = aladin_cover_from_isbn(isbn)
+                        if cover:
+                            st.image(cover, use_container_width=True)
+        else:
+            st.info("검색 결과가 없습니다.")
 else:
-    html += inject
-
-# 렌더
-components.html(html, height=1600, scrolling=True)
+    # 첫 화면 도움말
+    st.info("상단 입력창에 검색어를 입력하고 **검색** 버튼을 눌러주세요.")
