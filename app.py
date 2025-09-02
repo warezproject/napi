@@ -55,7 +55,7 @@ if not html_path.exists():
 html = html_path.read_text(encoding="utf-8")
 
 # 5) 결과 주입 & searchBooks 오버라이드 스크립트 삽입
-inject = f"""
+inject = """
 <script>
   // 서버에서 주입한 검색 결과 (키는 절대 노출되지 않음)
   window.__PRELOADED__ = {{
