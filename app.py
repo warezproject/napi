@@ -443,7 +443,7 @@ def call_nlk_api(keyword: str, page_num: int = 1, page_size: int = 10):
 # -----------------------------
 # RISS API 호출
 # -----------------------------
-def call_riss_api(keyword: str, page_size: int = 50):
+def call_riss_api(keyword: str, rowcount):
     """
     RISS Open API 호출
     - 엔드포인트(기본): http://www.riss.kr/openApi
