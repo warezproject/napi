@@ -15,6 +15,7 @@ st.set_page_config(page_title="국가정보정책협의회 분과위원회 TEST"
 st.title("국가정보정책협의회 TEST")
 st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 API + 알라딘 API + RISS 단행본 API")
 st.caption("※RISS는 API 정책상 최대 100건까지만 표출됩니다.")
+st.caption("최종 수정시간: 2025-09-03 11:00")
 
 # 페이지네이션 간격 좁히기 (한 번만 선언)
 st.markdown("""
@@ -50,6 +51,10 @@ if "aladin_page" not in st.session_state:
     st.session_state.aladin_page = 1
 if "riss_page" not in st.session_state:
     st.session_state.riss_page = 1
+if "nlk_prefetched_pages" not in st.session_state:
+    st.session_state.nlk_prefetched_pages = 10  # 최초 1~10
+if "aladin_prefetched_pages" not in st.session_state:
+    st.session_state.aladin_prefetched_pages = 10
 
 # -----------------------------
 # 입력 UI
@@ -65,6 +70,8 @@ if submitted:
     st.session_state.nlk_page = 1
     st.session_state.aladin_page = 1
     st.session_state.riss_page = 1
+    st.session_state.nlk_prefetched_pages = 10          # ✅ 리셋
+    st.session_state.aladin_prefetched_pages = 10       # ✅ 리셋
     st.rerun()
 
 # -----------------------------
@@ -604,33 +611,60 @@ j_start = (jndi_page - 1) * PAGE_SIZE
 j_end   = j_start + PAGE_SIZE
 jndi_page_data = jndi_hits[j_start:j_end]
 
-with st.spinner("검색 결과 미리 불러오는 중…"):
-    # NLK/알라딘/RISS는 동시에 prefetch
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        fut_nlk    = pool.submit(prefetch_nlk,    active_kw, PAGE_SIZE, PREFETCH_PAGES)
-        fut_aladin = pool.submit(prefetch_aladin, active_kw, PAGE_SIZE, PREFETCH_PAGES)
-        fut_riss   = pool.submit(prefetch_riss,   active_kw, 100)
-
-        # 결과 수집 (예외 발생 시 Streamlit에 바로 표시되도록 .result() 사용)
-        nlk_docs_prefetched,    nlk_total    = fut_nlk.result()
-        aladin_docs_prefetched, aladin_total = fut_aladin.result()
-        riss_docs_prefetched,   riss_total   = fut_riss.result()
-
-# 캐시된 문서 수(표시 상한은 100개)
-nlk_count    = len(nlk_docs_prefetched)
-aladin_count = len(aladin_docs_prefetched)
-riss_count   = len(riss_docs_prefetched)
-
-# 각 소스의 총 페이지(최대 10페이지로 고정)
-nlk_total_pages    = max(1, min(PREFETCH_PAGES, (nlk_count    + PAGE_SIZE - 1) // PAGE_SIZE))
-aladin_total_pages = max(1, min(PREFETCH_PAGES, (aladin_count + PAGE_SIZE - 1) // PAGE_SIZE))
-riss_total_pages   = max(1, min(PREFETCH_PAGES, (riss_count   + PAGE_SIZE - 1) // PAGE_SIZE))
-
-# 현재 페이지별 슬라이스
+# 현재 선택 페이지
 nlk_page    = st.session_state.nlk_page
 aladin_page = st.session_state.aladin_page
 riss_page   = st.session_state.riss_page
 
+# 먼저 1페이지만 가볍게 가져가 total 계산? → 우리는 prefetch_nlk/aladin이 total도 반환하므로,
+# 바로 prefetch를 돌리되, "요청 pages"를 동적으로 설정.
+
+# 1) 먼저 현재 저장된 프리패치 범위 사용
+req_nlk_pages    = st.session_state.nlk_prefetched_pages
+req_aladin_pages = st.session_state.aladin_prefetched_pages
+
+# 2) 병렬 prefetch (요청한 pages까지)
+with st.spinner("검색 결과 미리 불러오는 중…"):
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        fut_nlk    = pool.submit(prefetch_nlk,    active_kw, PAGE_SIZE, req_nlk_pages)
+        fut_aladin = pool.submit(prefetch_aladin, active_kw, PAGE_SIZE, req_aladin_pages)
+        fut_riss   = pool.submit(prefetch_riss,   active_kw, 100)
+
+        nlk_docs_prefetched,    nlk_total    = fut_nlk.result()
+        aladin_docs_prefetched, aladin_total = fut_aladin.result()
+        riss_docs_prefetched,   riss_total   = fut_riss.result()
+
+# API total 기반 전체 페이지(표시용) 계산 — ✅ 여기서는 "캡을 두지 말 것"
+nlk_total_pages_all    = max(1, (nlk_total    + PAGE_SIZE - 1) // PAGE_SIZE)
+aladin_total_pages_all = max(1, (aladin_total + PAGE_SIZE - 1) // PAGE_SIZE)
+
+# 사용자가 11 이상 선택했다면, 프리패치 범위를 다음 블록(예: 20)까지 확장
+def _next_block_end(p):   # 10, 20, 30...
+    return ((p - 1) // 10 + 1) * 10
+
+need_nlk_pages    = _next_block_end(nlk_page)
+need_aladin_pages = _next_block_end(aladin_page)
+
+# 전체 페이지를 넘지 않도록 클램프(표시만 큰 경우에도 불필요한 fetch 방지)
+need_nlk_pages    = min(need_nlk_pages,    nlk_total_pages_all)
+need_aladin_pages = min(need_aladin_pages, aladin_total_pages_all)
+
+# 필요시 즉시 확장 prefetch (재호출해도 cache_data가 있어 이미 내려받은 페이지는 빠르게 반환)
+if need_nlk_pages > req_nlk_pages:
+    nlk_docs_prefetched, nlk_total = prefetch_nlk(active_kw, PAGE_SIZE, need_nlk_pages)
+    st.session_state.nlk_prefetched_pages = need_nlk_pages
+
+if need_aladin_pages > req_aladin_pages:
+    aladin_docs_prefetched, aladin_total = prefetch_aladin(active_kw, PAGE_SIZE, need_aladin_pages)
+    st.session_state.aladin_prefetched_pages = need_aladin_pages
+
+# 최종 카운트/표시 페이지 계산 (표시는 전체 페이지, 데이터 슬라이스는 현재 프리패치 범위 내에서)
+nlk_prefetched_count    = len(nlk_docs_prefetched)       # ≤ need_nlk_pages*PAGE_SIZE
+aladin_prefetched_count = len(aladin_docs_prefetched)
+riss_count              = len(riss_docs_prefetched)      # ≤ 100
+
+# "표시용 전체 페이지"는 API total 기준으로,
+# "실제 슬라이스"는 prefetched 문서에서 자릅니다.
 n_start = (nlk_page - 1) * PAGE_SIZE
 n_end   = n_start + PAGE_SIZE
 nlk_page_data = nlk_docs_prefetched[n_start:n_end]
@@ -682,7 +716,7 @@ with col_left:
 # ----- 국립중앙도서관 -----
 with col_c1:
     st.subheader("국립중앙도서관")
-    st.caption(f"총 {nlk_total}건 · {nlk_page}/{nlk_total_pages}페이지")
+    st.caption(f"총 {nlk_total}건 · {nlk_page}/{nlk_total_pages_all}페이지")
     if nlk_page_data:
         for d in nlk_page_data:
             with st.container(border=True):
@@ -696,8 +730,8 @@ with col_c1:
                 )
     else:
         st.info("검색 결과가 없습니다.")
-    if nlk_total_pages > 1:
-        opts = make_page_window(nlk_page, nlk_total_pages, window=10)    # ✅ 1~10 기본
+    if nlk_total_pages_all > 1:
+        opts = make_page_window(nlk_page, nlk_total_pages_all, window=10)    # ✅ 1~10 기본
         st.markdown('<div data-testid="nlk_pager">', unsafe_allow_html=True)
         sel = st.radio(
             "NLK 페이지", opts,
@@ -713,7 +747,7 @@ with col_c1:
 # ----- 알라딘 (표지 미표시 버전) -----
 with col_c2:
     st.subheader("알라딘")
-    st.caption(f"총 {aladin_total}건 · {aladin_page}/{aladin_total_pages}페이지")
+    st.caption(f"총 {aladin_total}건 · {aladin_page}/{aladin_total_pages_all}페이지")
     if aladin_page_data:
         for d in aladin_page_data:
             with st.container(border=True):
@@ -727,8 +761,8 @@ with col_c2:
                 )
     else:
         st.info("검색 결과가 없습니다.")
-    if aladin_total_pages > 1:
-        opts = make_page_window(aladin_page, aladin_total_pages, window=10)  # ✅ 1~10 기본
+    if aladin_total_pages_all > 1:
+        opts = make_page_window(aladin_page, aladin_total_pages_all, window=10)  # ✅ 1~10 기본
         st.markdown('<div data-testid="aladin_pager">', unsafe_allow_html=True)
         sel = st.radio(
             "ALADIN 페이지", opts,
@@ -743,6 +777,7 @@ with col_c2:
 
 # ----- RISS -----
 with col_right:
+    riss_total_pages = max(1, (riss_count + PAGE_SIZE - 1)//PAGE_SIZE) 
     st.subheader("RISS")
     # total은 전체 건수(100 초과 가능), count는 실제 가져온 수(≤100)
     st.caption(f"총 {riss_total}건 (표시 {riss_count}건) · {riss_page}/{riss_total_pages}페이지")
