@@ -27,6 +27,10 @@ div[data-testid="aladin_pager"] label { padding: 2px 6px !important; border: 1px
 div[data-testid="jndi_pager"]  input:checked + div,
 div[data-testid="nlk_pager"]   input:checked + div,
 div[data-testid="aladin_pager"] input:checked + div { font-weight: 700; }
+            
+div[data-testid="riss_pager"] .stRadio > div { gap: 4px !important; }
+div[data-testid="riss_pager"] label { padding: 2px 6px !important; border: 1px solid #ddd; border-radius: 6px; }
+div[data-testid="riss_pager"] input:checked + div { font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -41,7 +45,8 @@ if "nlk_page" not in st.session_state:
     st.session_state.nlk_page = 1
 if "aladin_page" not in st.session_state:
     st.session_state.aladin_page = 1
-
+if "riss_page" not in st.session_state:
+    st.session_state.riss_page = 1
 
 # -----------------------------
 # 입력 UI
@@ -251,8 +256,6 @@ def _enrich_links_with_isbn(records: list, api_key: str) -> list:
 # -----------------------------
 # 알라딘 API 호출
 # -----------------------------
-
-
 def call_aladin_api(keyword: str, page_num: int = 1, page_size: int = 10, query_type: str = "Keyword"):
     """
     알라딘 상품 검색 API (ItemSearch)
@@ -437,7 +440,79 @@ def call_nlk_api(keyword: str, page_num: int = 1, page_size: int = 10):
     except Exception as e:
         st.warning(f"NLK OpenAPI 호출 오류: {e}")
         return [], 0
+# -----------------------------
+# RISS API 호출
+# -----------------------------
+def call_riss_api(keyword: str, page_size: int = 50):
+    """
+    RISS Open API 호출
+    - 엔드포인트(기본): http://www.riss.kr/openApi
+    - 응답: <record><head>...<totalcount>...</totalcount>...<metadata>...</metadata>...</record>
+    - 반환: (docs, totalcount)
+    - 페이지 파라미터가 공식 제공되지 않아 보이므로(제공 시 문서에 맞춰 확장),
+      한 번 호출로 받아온 결과를 클라이언트 사이드에서 페이지네이션합니다.
+    """
+    if not keyword:
+        return [], 0
 
+    api_key = st.secrets.get("RISS_API_KEY")
+    if not api_key:
+        st.error("Secrets에 RISS_API_KEY가 없습니다.")
+        return [], 0
+
+    base = st.secrets.get("RISS_PROXY_BASE", "").rstrip("/")
+    if base:
+        # 프록시(HTTPS) 경유: ?key=&version=1.0&type=U&keyword=...
+        url = f"{base}/"
+        params = {"key": api_key, "version": "1.0", "type": "U", "keyword": keyword}
+    else:
+        # 직접 호출(HTTP). Streamlit Cloud에서 HTTP가 막히면 프록시 사용을 권장
+        url = "http://www.riss.kr/openApi"
+        params = {"key": api_key, "version": "1.0", "type": "U", "keyword": keyword}
+
+    headers = {"User-Agent": "Mozilla/5.0 (Streamlit RISS Client)"}
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=12)
+        r.raise_for_status()
+        root = ET.fromstring(r.text)
+
+        # totalcount
+        total_str = (root.findtext(".//totalcount") or "0").strip()
+        try:
+            total = int(total_str)
+        except:
+            total = 0
+
+        docs = []
+        for md in root.findall(".//metadata"):
+            title   = (md.findtext("riss.title") or "").strip() or "제목 없음"
+            author  = (md.findtext("riss.author") or "").strip() or "정보 없음"
+            pub     = (md.findtext("riss.publisher") or "").strip() or "정보 없음"
+            pdate   = (md.findtext("riss.pubdate") or "").strip()
+            mtype   = (md.findtext("riss.mtype") or "").strip()
+            url     = (md.findtext("url") or "").strip()
+
+            # holdings가 여러 번 나올 수 있음 → '; '로 합치기
+            holdings_nodes = md.findall("riss.holdings")
+            holdings = "; ".join([(n.text or "").strip() for n in holdings_nodes if (n is not None and n.text)])
+
+            docs.append({
+                "TITLE": title,
+                "AUTHOR": author,
+                "PUBLISHER": pub,
+                "PUBDATE": pdate,
+                "MTYPE": mtype,
+                "HOLDINGS": holdings,
+                "URL": url,
+            })
+
+        # RISS는 페이지 파라미터가 문서에 없으므로, 여기서는 한 번 받아온 리스트만 반환
+        # (필요시 프록시에서 페이지 기능을 보강 가능)
+        return docs, total
+
+    except Exception as e:
+        st.warning(f"RISS API 호출/파싱 오류: {e}")
+        return [], 0
 
 # -----------------------------
 # 알라딘 커버 (옵션)
@@ -452,13 +527,11 @@ def aladin_cover_from_isbn(isbn: str):
 # -----------------------------
 jndi_all, jndi_meta = load_jndi_json_best_effort()
 
-# -----------------------------
-# 검색 실행 (세션의 query 기준준)
-# -----------------------------
+# ===================== BEGIN: 4열 렌더링 (왼:JNDI · 중1:NLK · 중2:알라딘 · 오른:RISS) =====================
 PAGE_SIZE = 10
-active_kw = st.session_state.query  # 세션의 검색어로 항상 렌더링
+active_kw = st.session_state.query
 
-# ===== 데이터 준비 =====
+# 데이터 준비
 # 전남연구원
 jndi_all, jndi_meta = load_jndi_json_best_effort()
 jndi_hits = search_jndi(jndi_all, active_kw)
@@ -469,7 +542,7 @@ j_start = (jndi_page - 1) * PAGE_SIZE
 j_end   = j_start + PAGE_SIZE
 jndi_page_data = jndi_hits[j_start:j_end]
 
-# 국립중앙도서관
+# 국립중앙도서관 (XML)
 nlk_page = st.session_state.nlk_page
 nlk_docs, nlk_total = call_nlk_api(active_kw, page_num=nlk_page, page_size=PAGE_SIZE)
 nlk_total_pages = max(1, (nlk_total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -477,16 +550,24 @@ nlk_total_pages = max(1, (nlk_total + PAGE_SIZE - 1) // PAGE_SIZE)
 # 알라딘
 ALADIN_PAGE_SIZE = 10
 aladin_page = st.session_state.aladin_page
-aladin_docs, aladin_total = call_aladin_api(active_kw, page_num=aladin_page, page_size=ALADIN_PAGE_SIZE)
+aladin_docs, aladin_total = call_aladin_api(active_kw, page_num=aladin_page, page_size=ALADIN_PAGE_SIZE, query_type="Title")
 aladin_total_pages = max(1, (aladin_total + ALADIN_PAGE_SIZE - 1) // ALADIN_PAGE_SIZE)
 
-# -----------------------------
-# 3열 레이아웃 (왼/JNDI · 중/NLK · 오/알라딘)
-# -----------------------------
-st.write("---")
-col_left, col_center, col_right = st.columns([1, 1, 1])
+# RISS (클라이언트 페이지네이션)
+RISS_PAGE_SIZE = 10
+riss_page = st.session_state.riss_page
+riss_docs_all, riss_total = call_riss_api(active_kw)
+# 한 번 받은 리스트를 페이지 단위로 슬라이스
+riss_total_pages = max(1, (len(riss_docs_all) + RISS_PAGE_SIZE - 1) // RISS_PAGE_SIZE)
+r_start = (riss_page - 1) * RISS_PAGE_SIZE
+r_end   = r_start + RISS_PAGE_SIZE
+riss_page_data = riss_docs_all[r_start:r_end]
 
-# ===== 왼쪽: 전남연구원 =====
+# 4열 레이아웃
+st.write("---")
+col_left, col_c1, col_c2, col_right = st.columns([1, 1, 1, 1])
+
+# ----- 전남연구원 -----
 with col_left:
     st.subheader("전남연구원")
     st.caption(f"총 {jndi_total}건 · {jndi_page}/{jndi_total_pages}페이지")
@@ -502,23 +583,17 @@ with col_left:
                 )
     else:
         st.info("검색 결과가 없습니다.")
-
-    # 하단 페이지네이션 (가로, 촘촘)
     if jndi_total_pages > 1:
-        start_page = max(1, jndi_page - 2)
-        end_page   = min(jndi_total_pages, jndi_page + 2)
-        opts       = list(range(start_page, end_page + 1))
+        start_page = max(1, jndi_page - 2); end_page = min(jndi_total_pages, jndi_page + 2)
+        opts = list(range(start_page, end_page + 1))
         st.markdown('<div data-testid="jndi_pager">', unsafe_allow_html=True)
-        sel = st.radio("JNDI 페이지", opts, index=opts.index(jndi_page),
-                       horizontal=True, label_visibility="collapsed",
-                       key=f"jndi_radio_{active_kw}")
+        sel = st.radio("JNDI 페이지", opts, index=opts.index(jndi_page), horizontal=True, label_visibility="collapsed", key=f"jndi_radio_{active_kw}")
         st.markdown('</div>', unsafe_allow_html=True)
         if sel != jndi_page:
-            st.session_state.jndi_page = int(sel)
-            st.rerun()
+            st.session_state.jndi_page = int(sel); st.rerun()
 
-# ===== 가운데: 국립중앙도서관 =====
-with col_center:
+# ----- 국립중앙도서관 -----
+with col_c1:
     st.subheader("국립중앙도서관")
     st.caption(f"총 {nlk_total}건 · {nlk_page}/{nlk_total_pages}페이지")
     if nlk_docs:
@@ -534,22 +609,17 @@ with col_center:
                 )
     else:
         st.info("검색 결과가 없습니다.")
-
     if nlk_total_pages > 1:
-        start_page = max(1, nlk_page - 2)
-        end_page   = min(nlk_total_pages, nlk_page + 2)
-        opts       = list(range(start_page, end_page + 1))
+        start_page = max(1, nlk_page - 2); end_page = min(nlk_total_pages, nlk_page + 2)
+        opts = list(range(start_page, end_page + 1))
         st.markdown('<div data-testid="nlk_pager">', unsafe_allow_html=True)
-        sel = st.radio("NLK 페이지", opts, index=opts.index(nlk_page),
-                       horizontal=True, label_visibility="collapsed",
-                       key=f"nlk_radio_{active_kw}")
+        sel = st.radio("NLK 페이지", opts, index=opts.index(nlk_page), horizontal=True, label_visibility="collapsed", key=f"nlk_radio_{active_kw}")
         st.markdown('</div>', unsafe_allow_html=True)
         if sel != nlk_page:
-            st.session_state.nlk_page = int(sel)
-            st.rerun()
+            st.session_state.nlk_page = int(sel); st.rerun()
 
-# ===== 오른쪽: 알라딘 =====
-with col_right:
+# ----- 알라딘 (표지 미표시 버전) -----
+with col_c2:
     st.subheader("알라딘")
     st.caption(f"총 {aladin_total}건 · {aladin_page}/{aladin_total_pages}페이지")
     if aladin_docs:
@@ -563,22 +633,44 @@ with col_right:
                     f"출판사: {d.get('PUBLISHER','정보 없음')} · "
                     f"출간일: {d.get('PUBDATE','정보 없음')}"
                 )
-                #북커버 표시
-                #cover = d.get("COVER", "")
-                #if cover:
-                #    st.image(cover, use_container_width=True)
     else:
         st.info("검색 결과가 없습니다.")
-
     if aladin_total_pages > 1:
-        start_page = max(1, aladin_page - 2)
-        end_page   = min(aladin_total_pages, aladin_page + 2)
-        opts       = list(range(start_page, end_page + 1))
+        start_page = max(1, aladin_page - 2); end_page = min(aladin_total_pages, aladin_page + 2)
+        opts = list(range(start_page, end_page + 1))
         st.markdown('<div data-testid="aladin_pager">', unsafe_allow_html=True)
-        sel = st.radio("ALADIN 페이지", opts, index=opts.index(aladin_page),
-                       horizontal=True, label_visibility="collapsed",
-                       key=f"aladin_radio_{active_kw}")
+        sel = st.radio("ALADIN 페이지", opts, index=opts.index(aladin_page), horizontal=True, label_visibility="collapsed", key=f"aladin_radio_{active_kw}")
         st.markdown('</div>', unsafe_allow_html=True)
         if sel != aladin_page:
-            st.session_state.aladin_page = int(sel)
-            st.rerun()
+            st.session_state.aladin_page = int(sel); st.rerun()
+
+# ----- RISS -----
+with col_right:
+    st.subheader("RISS")
+    st.caption(f"총 {riss_total}건 · {riss_page}/{riss_total_pages}페이지 (클라이언트 페이지네이션)")
+    if riss_page_data:
+        for d in riss_page_data:
+            with st.container(border=True):
+                title = d.get("TITLE", "제목 없음")
+                url   = d.get("URL", "")
+                st.markdown(f"**[{title}]({url})**" if url else f"**{title}**")
+                st.caption(
+                    f"저자: {d.get('AUTHOR','정보 없음')} · "
+                    f"출판사: {d.get('PUBLISHER','정보 없음')} · "
+                    f"발행년도: {d.get('PUBDATE','정보 없음')} · "
+                    f"자료유형: {d.get('MTYPE','정보 없음')}"
+                )
+                holdings = d.get("HOLDINGS", "")
+                if holdings:
+                    st.code(f"소장처: {holdings}", language="text")
+    else:
+        st.info("검색 결과가 없습니다.")
+    if riss_total_pages > 1:
+        start_page = max(1, riss_page - 2); end_page = min(riss_total_pages, riss_page + 2)
+        opts = list(range(start_page, end_page + 1))
+        st.markdown('<div data-testid="riss_pager">', unsafe_allow_html=True)
+        sel = st.radio("RISS 페이지", opts, index=opts.index(riss_page), horizontal=True, label_visibility="collapsed", key=f"riss_radio_{active_kw}")
+        st.markdown('</div>', unsafe_allow_html=True)
+        if sel != riss_page:
+            st.session_state.riss_page = int(sel); st.rerun()
+# ===================== END: 4열 렌더링 =====================
