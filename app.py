@@ -15,7 +15,7 @@ st.set_page_config(page_title="국가정보정책협의회 분과위원회 TEST"
 st.title("국가정보정책협의회 TEST")
 st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 API + 알라딘 API + RISS 단행본 API")
 st.caption("※RISS는 API 정책상 최대 100건까지만 표출됩니다.")
-st.caption("최종 수정시간: 2025-09-03 11:00")
+st.caption("최종 수정시간: 2025-09-03 10:40")
 
 # 페이지네이션 간격 좁히기 (한 번만 선언)
 st.markdown("""
@@ -624,7 +624,7 @@ req_nlk_pages    = st.session_state.nlk_prefetched_pages
 req_aladin_pages = st.session_state.aladin_prefetched_pages
 
 # 2) 병렬 prefetch (요청한 pages까지)
-with st.spinner("검색 결과 미리 불러오는 중…"):
+with st.spinner("검색중…"):
     with ThreadPoolExecutor(max_workers=3) as pool:
         fut_nlk    = pool.submit(prefetch_nlk,    active_kw, PAGE_SIZE, req_nlk_pages)
         fut_aladin = pool.submit(prefetch_aladin, active_kw, PAGE_SIZE, req_aladin_pages)
