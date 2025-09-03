@@ -11,7 +11,7 @@ import streamlit as st
 # -----------------------------
 st.set_page_config(page_title="국가정보정책협의회 TEST", layout="wide")
 st.title("국가정보정책협의회 TEST")
-st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 Open API")
+st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 API + 알라딘 API + RISS API")
 
 # 페이지네이션 간격 좁히기 (한 번만 선언)
 st.markdown("""
@@ -460,15 +460,17 @@ def call_riss_api(keyword: str, page_size: int = 50):
         st.error("Secrets에 RISS_API_KEY가 없습니다.")
         return [], 0
 
+    rowcount = 100
+
     base = st.secrets.get("RISS_PROXY_BASE", "").rstrip("/")
     if base:
         # 프록시(HTTPS) 경유: ?key=&version=1.0&type=U&keyword=...
         url = f"{base}/"
-        params = {"key": api_key, "version": "1.0", "type": "U", "keyword": keyword}
+        params = {"key": api_key, "version": "1.0", "type": "U", "rowcount": min(max(int(rowcount), 1), 100), "keyword": keyword}
     else:
         # 직접 호출(HTTP). Streamlit Cloud에서 HTTP가 막히면 프록시 사용을 권장
         url = "http://www.riss.kr/openApi"
-        params = {"key": api_key, "version": "1.0", "type": "U", "keyword": keyword}
+        params = {"key": api_key, "version": "1.0", "type": "U", "rowcount": min(max(int(rowcount), 1), 100), "keyword": keyword}
 
     headers = {"User-Agent": "Mozilla/5.0 (Streamlit RISS Client)"}
     try:
@@ -555,10 +557,18 @@ aladin_total_pages = max(1, (aladin_total + ALADIN_PAGE_SIZE - 1) // ALADIN_PAGE
 
 # RISS (클라이언트 페이지네이션)
 RISS_PAGE_SIZE = 10
+if "riss_page" not in st.session_state:
+    st.session_state.riss_page = 1
 riss_page = st.session_state.riss_page
-riss_docs_all, riss_total = call_riss_api(active_kw)
-# 한 번 받은 리스트를 페이지 단위로 슬라이스
-riss_total_pages = max(1, (len(riss_docs_all) + RISS_PAGE_SIZE - 1) // RISS_PAGE_SIZE)
+
+# 서버에서 최대 100개만 가져옴
+riss_docs_all, riss_total = call_riss_api(active_kw, rowcount=100)
+
+# 실제로 받은 개수 기준으로 페이징
+riss_count = len(riss_docs_all)          # ≤ 100
+riss_total_pages = max(1, (riss_count + RISS_PAGE_SIZE - 1) // RISS_PAGE_SIZE)
+
+# 현재 페이지 슬라이스
 r_start = (riss_page - 1) * RISS_PAGE_SIZE
 r_end   = r_start + RISS_PAGE_SIZE
 riss_page_data = riss_docs_all[r_start:r_end]
@@ -647,7 +657,8 @@ with col_c2:
 # ----- RISS -----
 with col_right:
     st.subheader("RISS")
-    st.caption(f"총 {riss_total}건 · {riss_page}/{riss_total_pages}페이지 (클라이언트 페이지네이션)")
+    # total은 전체 건수(100 초과 가능), count는 실제 가져온 수(≤100)
+    st.caption(f"총 {riss_total}건 (표시 {riss_count}건) · {riss_page}/{riss_total_pages}페이지")
     if riss_page_data:
         for d in riss_page_data:
             with st.container(border=True):
@@ -665,12 +676,19 @@ with col_right:
                     st.code(f"소장처: {holdings}", language="text")
     else:
         st.info("검색 결과가 없습니다.")
+
+    # 하단 라디오 페이지네이션 (가로·촘촘)
     if riss_total_pages > 1:
-        start_page = max(1, riss_page - 2); end_page = min(riss_total_pages, riss_page + 2)
-        opts = list(range(start_page, end_page + 1))
+        start_page = max(1, riss_page - 2)
+        end_page   = min(riss_total_pages, riss_page + 2)
+        opts       = list(range(start_page, end_page + 1))
         st.markdown('<div data-testid="riss_pager">', unsafe_allow_html=True)
-        sel = st.radio("RISS 페이지", opts, index=opts.index(riss_page), horizontal=True, label_visibility="collapsed", key=f"riss_radio_{active_kw}")
+        sel = st.radio("RISS 페이지", opts,
+                       index=opts.index(riss_page),
+                       horizontal=True, label_visibility="collapsed",
+                       key=f"riss_radio_{active_kw}")
         st.markdown('</div>', unsafe_allow_html=True)
         if sel != riss_page:
-            st.session_state.riss_page = int(sel); st.rerun()
+            st.session_state.riss_page = int(sel)
+            st.rerun()
 # ===================== END: 4열 렌더링 =====================
