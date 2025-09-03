@@ -459,9 +459,7 @@ def call_riss_api(keyword: str, page_size: int = 50):
     if not api_key:
         st.error("Secrets에 RISS_API_KEY가 없습니다.")
         return [], 0
-
-    rowcount = 100
-
+    
     base = st.secrets.get("RISS_PROXY_BASE", "").rstrip("/")
     if base:
         # 프록시(HTTPS) 경유: ?key=&version=1.0&type=U&keyword=...
