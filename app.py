@@ -541,7 +541,7 @@ def make_page_window(current: int, total_pages: int, window: int = 10):
 # -----------------------------
 # 미리가져오기(prefetch)
 # -----------------------------
-PREFETCH_PAGES = 10
+PREFETCH_PAGES = 5
 @st.cache_data(show_spinner=True)
 def prefetch_nlk(keyword: str, page_size: int = PAGE_SIZE, pages: int = PREFETCH_PAGES):
     """NLK: 1~pages 페이지까지 미리 가져와서 리스트로 합치기"""
