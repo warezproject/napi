@@ -668,8 +668,8 @@ with col_left:
 with col_c1:
     st.subheader("국립중앙도서관")
     st.caption(f"총 {nlk_total}건 · {nlk_page}/{nlk_total_pages}페이지")
-    if nlk_docs:
-        for d in nlk_docs:
+    if nlk_page_data:
+        for d in nlk_page_data:
             with st.container(border=True):
                 title = d.get("TITLE", "제목 없음")
                 link  = d.get("DETAIL_LINK") or ""
@@ -699,8 +699,8 @@ with col_c1:
 with col_c2:
     st.subheader("알라딘")
     st.caption(f"총 {aladin_total}건 · {aladin_page}/{aladin_total_pages}페이지")
-    if aladin_docs:
-        for d in aladin_docs:
+    if aladin_page_data:
+        for d in aladin_page_data:
             with st.container(border=True):
                 title = d.get("TITLE", "제목 없음")
                 link  = d.get("LINK", "")
@@ -725,7 +725,6 @@ with col_c2:
         if sel != aladin_page:
             st.session_state.aladin_page = int(sel)
             st.rerun()
-
 
 # ----- RISS -----
 with col_right:
