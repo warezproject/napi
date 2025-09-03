@@ -9,7 +9,7 @@ import streamlit as st
 # -----------------------------
 # 기본 설정
 # -----------------------------
-st.set_page_config(page_title="국가정보정책협의회 TEST", layout="wide")
+st.set_page_config(page_title="국가정보정책협의회 분과위원회 TEST", layout="wide")
 st.title("국가정보정책협의회 TEST")
 st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 API + 알라딘 API + RISS 단행본 API")
 st.caption("※RISS는 API 정책상 최대 100건까지만 표출됩니다.")
@@ -516,12 +516,26 @@ def call_riss_api(keyword: str, rowcount):
         return [], 0
 
 # -----------------------------
-# 알라딘 커버 (옵션)
+# 공통 헬퍼퍼
 # -----------------------------
-def aladin_cover_from_isbn(isbn: str):
-    if not isbn:
-        return ""
-    return f"https://image.aladin.co.kr/product/{isbn[-3:]}/{isbn[-5:]}cover.jpg"
+def make_page_window(current: int, total_pages: int, window: int = 10):
+    """
+    총 페이지 중에서 현재 페이지를 중심으로 window(기본 10) 크기의 페이지 목록을 만든다.
+    - total_pages <= window 면 1..total_pages
+    - 처음엔 1..10, 끝 근처에선 total_pages-9..total_pages
+    """
+    if total_pages <= window:
+        return list(range(1, total_pages + 1))
+    # 기본: current를 가운데에 두려고 시도
+    half = window // 2
+    start = max(1, current - half)
+    end = start + window - 1
+    # 끝을 넘으면 뒤에서 당겨오기
+    if end > total_pages:
+        end = total_pages
+        start = end - window + 1
+    return list(range(start, end + 1))
+
 
 # -----------------------------
 # 데이터 로드
@@ -593,13 +607,19 @@ with col_left:
     else:
         st.info("검색 결과가 없습니다.")
     if jndi_total_pages > 1:
-        start_page = max(1, jndi_page - 2); end_page = min(jndi_total_pages, jndi_page + 2)
-        opts = list(range(start_page, end_page + 1))
+        opts = make_page_window(jndi_page, jndi_total_pages, window=10)  # ✅ 1~10 기본
         st.markdown('<div data-testid="jndi_pager">', unsafe_allow_html=True)
-        sel = st.radio("JNDI 페이지", opts, index=opts.index(jndi_page), horizontal=True, label_visibility="collapsed", key=f"jndi_radio_{active_kw}")
+        sel = st.radio(
+            "JNDI 페이지", opts,
+            index=opts.index(jndi_page),
+            horizontal=True, label_visibility="collapsed",
+            key=f"jndi_radio_{active_kw}",
+        )
         st.markdown('</div>', unsafe_allow_html=True)
         if sel != jndi_page:
-            st.session_state.jndi_page = int(sel); st.rerun()
+            st.session_state.jndi_page = int(sel)
+            st.rerun()
+
 
 # ----- 국립중앙도서관 -----
 with col_c1:
@@ -619,13 +639,18 @@ with col_c1:
     else:
         st.info("검색 결과가 없습니다.")
     if nlk_total_pages > 1:
-        start_page = max(1, nlk_page - 2); end_page = min(nlk_total_pages, nlk_page + 2)
-        opts = list(range(start_page, end_page + 1))
+        opts = make_page_window(nlk_page, nlk_total_pages, window=10)    # ✅ 1~10 기본
         st.markdown('<div data-testid="nlk_pager">', unsafe_allow_html=True)
-        sel = st.radio("NLK 페이지", opts, index=opts.index(nlk_page), horizontal=True, label_visibility="collapsed", key=f"nlk_radio_{active_kw}")
+        sel = st.radio(
+            "NLK 페이지", opts,
+            index=opts.index(nlk_page),
+            horizontal=True, label_visibility="collapsed",
+            key=f"nlk_radio_{active_kw}",
+        )
         st.markdown('</div>', unsafe_allow_html=True)
         if sel != nlk_page:
-            st.session_state.nlk_page = int(sel); st.rerun()
+            st.session_state.nlk_page = int(sel)
+            st.rerun()
 
 # ----- 알라딘 (표지 미표시 버전) -----
 with col_c2:
@@ -645,13 +670,19 @@ with col_c2:
     else:
         st.info("검색 결과가 없습니다.")
     if aladin_total_pages > 1:
-        start_page = max(1, aladin_page - 2); end_page = min(aladin_total_pages, aladin_page + 2)
-        opts = list(range(start_page, end_page + 1))
+        opts = make_page_window(aladin_page, aladin_total_pages, window=10)  # ✅ 1~10 기본
         st.markdown('<div data-testid="aladin_pager">', unsafe_allow_html=True)
-        sel = st.radio("ALADIN 페이지", opts, index=opts.index(aladin_page), horizontal=True, label_visibility="collapsed", key=f"aladin_radio_{active_kw}")
+        sel = st.radio(
+            "ALADIN 페이지", opts,
+            index=opts.index(aladin_page),
+            horizontal=True, label_visibility="collapsed",
+            key=f"aladin_radio_{active_kw}",
+        )
         st.markdown('</div>', unsafe_allow_html=True)
         if sel != aladin_page:
-            st.session_state.aladin_page = int(sel); st.rerun()
+            st.session_state.aladin_page = int(sel)
+            st.rerun()
+
 
 # ----- RISS -----
 with col_right:
@@ -678,14 +709,14 @@ with col_right:
 
     # 하단 라디오 페이지네이션 (가로·촘촘)
     if riss_total_pages > 1:
-        start_page = max(1, riss_page - 2)
-        end_page   = min(riss_total_pages, riss_page + 2)
-        opts       = list(range(start_page, end_page + 1))
+        opts = make_page_window(riss_page, riss_total_pages, window=10)  # ✅ 1~10 기본
         st.markdown('<div data-testid="riss_pager">', unsafe_allow_html=True)
-        sel = st.radio("RISS 페이지", opts,
-                       index=opts.index(riss_page),
-                       horizontal=True, label_visibility="collapsed",
-                       key=f"riss_radio_{active_kw}")
+        sel = st.radio(
+            "RISS 페이지", opts,
+            index=opts.index(riss_page),
+            horizontal=True, label_visibility="collapsed",
+            key=f"riss_radio_{active_kw}",
+        )
         st.markdown('</div>', unsafe_allow_html=True)
         if sel != riss_page:
             st.session_state.riss_page = int(sel)
