@@ -61,6 +61,8 @@ if submitted:
     st.session_state.query = kw.strip()
     st.session_state.jndi_page = 1
     st.session_state.nlk_page = 1
+    st.session_state.aladin_page = 1
+    st.session_state.riss_page = 1
     st.rerun()
 
 # -----------------------------
@@ -516,7 +518,7 @@ def call_riss_api(keyword: str, rowcount):
         return [], 0
 
 # -----------------------------
-# 공통 헬퍼퍼
+# 공통 헬퍼
 # -----------------------------
 def make_page_window(current: int, total_pages: int, window: int = 10):
     """
@@ -536,55 +538,96 @@ def make_page_window(current: int, total_pages: int, window: int = 10):
         start = end - window + 1
     return list(range(start, end + 1))
 
+# -----------------------------
+# 미리가져오기(prefetch)
+# -----------------------------
+@st.cache_data(show_spinner=True)
+def prefetch_nlk(keyword: str, page_size: int = PAGE_SIZE, pages: int = PREFETCH_PAGES):
+    """NLK: 1~pages 페이지까지 미리 가져와서 리스트로 합치기"""
+    all_docs, total = [], 0
+    if not keyword:
+        return all_docs, total
+    for p in range(1, pages + 1):
+        docs, t = call_nlk_api(keyword, page_num=p, page_size=page_size)
+        if total == 0:
+            total = t
+        if not docs:
+            break
+        all_docs.extend(docs)
+        if len(docs) < page_size:
+            break
+    # 최대 pages*page_size까지만 캐시(과도 확장 방지)
+    return all_docs[:pages * page_size], total
 
-# -----------------------------
-# 데이터 로드
-# -----------------------------
-jndi_all, jndi_meta = load_jndi_json_best_effort()
+@st.cache_data(show_spinner=True)
+def prefetch_aladin(keyword: str, page_size: int = PAGE_SIZE, pages: int = PREFETCH_PAGES):
+    """알라딘: 1~pages 페이지까지 미리 가져와서 리스트로 합치기"""
+    all_docs, total = [], 0
+    if not keyword:
+        return all_docs, total
+    for p in range(1, pages + 1):
+        docs, t = call_aladin_api(keyword, page_num=p, page_size=page_size, query_type="Title")
+        if total == 0:
+            total = t
+        if not docs:
+            break
+        all_docs.extend(docs)
+        if len(docs) < page_size:
+            break
+    return all_docs[:pages * page_size], total
+
+@st.cache_data(show_spinner=True)
+def prefetch_riss(keyword: str, rowcount: int = 100):
+    """
+    RISS: rowcount=100으로 한 번에 받아오면 끝.
+    (이미 최대 100개라 추가 호출 불필요)
+    """
+    docs, total = call_riss_api(keyword, rowcount=rowcount)  # 당신의 call_riss_api 최신 시그니처 사용
+    return docs, total
+
+# JNDI는 로컬 JSON이므로 별도 네트워크 호출 없음 -> 필터 후 슬라이스만
 
 # ===================== BEGIN: 4열 렌더링 (왼:JNDI · 중1:NLK · 중2:알라딘 · 오른:RISS) =====================
 PAGE_SIZE = 10
+PREFETCH_PAGES = 10
 active_kw = st.session_state.query
 
-# 데이터 준비
-# 전남연구원
-jndi_all, jndi_meta = load_jndi_json_best_effort()
+# ===== 전남연구원 (로컬) =====
+jndi_all, _meta = load_jndi_json_best_effort()
 jndi_hits = search_jndi(jndi_all, active_kw)
 jndi_total = len(jndi_hits)
-jndi_total_pages = max(1, (jndi_total + PAGE_SIZE - 1) // PAGE_SIZE)
+jndi_total_pages = max(1, min(PREFETCH_PAGES, (jndi_total + PAGE_SIZE - 1) // PAGE_SIZE))  # 최대 10페이지까지만 노출
 jndi_page = st.session_state.jndi_page
 j_start = (jndi_page - 1) * PAGE_SIZE
 j_end   = j_start + PAGE_SIZE
 jndi_page_data = jndi_hits[j_start:j_end]
 
-# 국립중앙도서관 (XML)
+# ===== NLK (미리 가져온 1~10페이지) =====
+nlk_docs_prefetched, nlk_total = prefetch_nlk(active_kw, page_size=PAGE_SIZE, pages=PREFETCH_PAGES)
+nlk_count = len(nlk_docs_prefetched)  # ≤ 100
+nlk_total_pages = max(1, min(PREFETCH_PAGES, (nlk_count + PAGE_SIZE - 1) // PAGE_SIZE))
 nlk_page = st.session_state.nlk_page
-nlk_docs, nlk_total = call_nlk_api(active_kw, page_num=nlk_page, page_size=PAGE_SIZE)
-nlk_total_pages = max(1, (nlk_total + PAGE_SIZE - 1) // PAGE_SIZE)
+n_start = (nlk_page - 1) * PAGE_SIZE
+n_end   = n_start + PAGE_SIZE
+nlk_page_data = nlk_docs_prefetched[n_start:n_end]
 
-# 알라딘
-ALADIN_PAGE_SIZE = 10
+# ===== 알라딘 (미리 가져온 1~10페이지) =====
+aladin_docs_prefetched, aladin_total = prefetch_aladin(active_kw, page_size=PAGE_SIZE, pages=PREFETCH_PAGES)
+aladin_count = len(aladin_docs_prefetched)
+aladin_total_pages = max(1, min(PREFETCH_PAGES, (aladin_count + PAGE_SIZE - 1) // PAGE_SIZE))
 aladin_page = st.session_state.aladin_page
-aladin_docs, aladin_total = call_aladin_api(active_kw, page_num=aladin_page, page_size=ALADIN_PAGE_SIZE, query_type="Title")
-aladin_total_pages = max(1, (aladin_total + ALADIN_PAGE_SIZE - 1) // ALADIN_PAGE_SIZE)
+a_start = (aladin_page - 1) * PAGE_SIZE
+a_end   = a_start + PAGE_SIZE
+aladin_page_data = aladin_docs_prefetched[a_start:a_end]
 
-# RISS (클라이언트 페이지네이션)
-RISS_PAGE_SIZE = 10
-if "riss_page" not in st.session_state:
-    st.session_state.riss_page = 1
+# ===== RISS (rowcount=100 한방) =====
+riss_docs_prefetched, riss_total = prefetch_riss(active_kw, rowcount=100)
+riss_count = len(riss_docs_prefetched)       # ≤ 100
+riss_total_pages = max(1, min(PREFETCH_PAGES, (riss_count + PAGE_SIZE - 1) // PAGE_SIZE))
 riss_page = st.session_state.riss_page
-
-# 서버에서 최대 100개만 가져옴
-riss_docs_all, riss_total = call_riss_api(active_kw, rowcount=100)
-
-# 실제로 받은 개수 기준으로 페이징
-riss_count = len(riss_docs_all)          # ≤ 100
-riss_total_pages = max(1, (riss_count + RISS_PAGE_SIZE - 1) // RISS_PAGE_SIZE)
-
-# 현재 페이지 슬라이스
-r_start = (riss_page - 1) * RISS_PAGE_SIZE
-r_end   = r_start + RISS_PAGE_SIZE
-riss_page_data = riss_docs_all[r_start:r_end]
+r_start = (riss_page - 1) * PAGE_SIZE
+r_end   = r_start + PAGE_SIZE
+riss_page_data = riss_docs_prefetched[r_start:r_end]
 
 # 4열 레이아웃
 st.write("---")
