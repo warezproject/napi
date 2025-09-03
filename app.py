@@ -11,7 +11,8 @@ import streamlit as st
 # -----------------------------
 st.set_page_config(page_title="국가정보정책협의회 TEST", layout="wide")
 st.title("국가정보정책협의회 TEST")
-st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 API + 알라딘 API + RISS API")
+st.caption("전남연구원 로컬 데이터 + 국립중앙도서관 API + 알라딘 API + RISS 단행본 API")
+st.caption("※RISS는 API 정책상 최대 100건까지만 표출됩니다.")
 
 # 페이지네이션 간격 좁히기 (한 번만 선언)
 st.markdown("""
@@ -464,11 +465,11 @@ def call_riss_api(keyword: str, rowcount):
     if base:
         # 프록시(HTTPS) 경유: ?key=&version=1.0&type=U&keyword=...
         url = f"{base}/"
-        params = {"key": api_key, "version": "1.0", "type": "U", "rowcount": min(max(int(rowcount), 1), 100), "keyword": keyword}
+        params = {"key": api_key, "version": "1.0", "type": "U", "rowcount": min(max(int(rowcount), 1), 100), "stype": "ab", "keyword": keyword}
     else:
         # 직접 호출(HTTP). Streamlit Cloud에서 HTTP가 막히면 프록시 사용을 권장
         url = "http://www.riss.kr/openApi"
-        params = {"key": api_key, "version": "1.0", "type": "U", "rowcount": min(max(int(rowcount), 1), 100), "keyword": keyword}
+        params = {"key": api_key, "version": "1.0", "type": "U", "rowcount": min(max(int(rowcount), 1), 100), "stype": "ab", "keyword": keyword}
 
     headers = {"User-Agent": "Mozilla/5.0 (Streamlit RISS Client)"}
     try:
