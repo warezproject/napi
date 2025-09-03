@@ -5,6 +5,8 @@ import re
 import xml.etree.ElementTree as ET
 import requests
 import streamlit as st
+from concurrent.futures import ThreadPoolExecutor
+
 
 # -----------------------------
 # 기본 설정
@@ -602,32 +604,45 @@ j_start = (jndi_page - 1) * PAGE_SIZE
 j_end   = j_start + PAGE_SIZE
 jndi_page_data = jndi_hits[j_start:j_end]
 
-# ===== NLK (미리 가져온 1~10페이지) =====
-nlk_docs_prefetched, nlk_total = prefetch_nlk(active_kw, page_size=PAGE_SIZE, pages=PREFETCH_PAGES)
-nlk_count = len(nlk_docs_prefetched)  # ≤ 100
-nlk_total_pages = max(1, min(PREFETCH_PAGES, (nlk_count + PAGE_SIZE - 1) // PAGE_SIZE))
-nlk_page = st.session_state.nlk_page
+with st.spinner("검색 결과 미리 불러오는 중…"):
+    # NLK/알라딘/RISS는 동시에 prefetch
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        fut_nlk    = pool.submit(prefetch_nlk,    active_kw, PAGE_SIZE, PREFETCH_PAGES)
+        fut_aladin = pool.submit(prefetch_aladin, active_kw, PAGE_SIZE, PREFETCH_PAGES)
+        fut_riss   = pool.submit(prefetch_riss,   active_kw, 100)
+
+        # 결과 수집 (예외 발생 시 Streamlit에 바로 표시되도록 .result() 사용)
+        nlk_docs_prefetched,    nlk_total    = fut_nlk.result()
+        aladin_docs_prefetched, aladin_total = fut_aladin.result()
+        riss_docs_prefetched,   riss_total   = fut_riss.result()
+
+# 캐시된 문서 수(표시 상한은 100개)
+nlk_count    = len(nlk_docs_prefetched)
+aladin_count = len(aladin_docs_prefetched)
+riss_count   = len(riss_docs_prefetched)
+
+# 각 소스의 총 페이지(최대 10페이지로 고정)
+nlk_total_pages    = max(1, min(PREFETCH_PAGES, (nlk_count    + PAGE_SIZE - 1) // PAGE_SIZE))
+aladin_total_pages = max(1, min(PREFETCH_PAGES, (aladin_count + PAGE_SIZE - 1) // PAGE_SIZE))
+riss_total_pages   = max(1, min(PREFETCH_PAGES, (riss_count   + PAGE_SIZE - 1) // PAGE_SIZE))
+
+# 현재 페이지별 슬라이스
+nlk_page    = st.session_state.nlk_page
+aladin_page = st.session_state.aladin_page
+riss_page   = st.session_state.riss_page
+
 n_start = (nlk_page - 1) * PAGE_SIZE
 n_end   = n_start + PAGE_SIZE
 nlk_page_data = nlk_docs_prefetched[n_start:n_end]
 
-# ===== 알라딘 (미리 가져온 1~10페이지) =====
-aladin_docs_prefetched, aladin_total = prefetch_aladin(active_kw, page_size=PAGE_SIZE, pages=PREFETCH_PAGES)
-aladin_count = len(aladin_docs_prefetched)
-aladin_total_pages = max(1, min(PREFETCH_PAGES, (aladin_count + PAGE_SIZE - 1) // PAGE_SIZE))
-aladin_page = st.session_state.aladin_page
 a_start = (aladin_page - 1) * PAGE_SIZE
 a_end   = a_start + PAGE_SIZE
 aladin_page_data = aladin_docs_prefetched[a_start:a_end]
 
-# ===== RISS (rowcount=100 한방) =====
-riss_docs_prefetched, riss_total = prefetch_riss(active_kw, rowcount=100)
-riss_count = len(riss_docs_prefetched)       # ≤ 100
-riss_total_pages = max(1, min(PREFETCH_PAGES, (riss_count + PAGE_SIZE - 1) // PAGE_SIZE))
-riss_page = st.session_state.riss_page
 r_start = (riss_page - 1) * PAGE_SIZE
 r_end   = r_start + PAGE_SIZE
 riss_page_data = riss_docs_prefetched[r_start:r_end]
+
 
 # 4열 레이아웃
 st.write("---")
