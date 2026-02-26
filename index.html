@@ -96,7 +96,7 @@ nlkContainer.innerHTML = '';
       });
     });
 
-  fetch(`https://www.nl.go.kr/seoji/SearchApi.do?cert_key=REMOVED_NLK_KEY&result_style=json&page_no=1&page_size=10&title=${encodeURIComponent(keyword)}`)
+  fetch(`/nlk?title=${encodeURIComponent(keyword)}&page_no=1&page_size=10`)
     .then(res => res.json())
     .then(data => {
       if (data.docs && data.docs.length > 0) {
