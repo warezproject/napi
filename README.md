@@ -36,11 +36,6 @@ ALADIN_TTB_KEY = "..."
 NLK_OPENAPI_KEY = "..."
 RISS_API_KEY = "..."
 ```
-
-- `NLK_OPENAPI_KEY`가 우선 사용됩니다.
-- `NLK_CERT_KEY`는 하위호환용 대체 키입니다.
-- `RISS_PROXY_BASE`는 선택값이며, 없으면 RISS 기본 엔드포인트를 사용합니다.
-
 ## 배포 메모
 
 - Streamlit Community Cloud 사용 시 `App Settings > Secrets`에 키를 등록하세요.
